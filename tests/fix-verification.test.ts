@@ -1,236 +1,227 @@
 /**
- * Integration test suite to verify the fix for tool_use/tool_result pairing issues
- * 
- * This test simulates the real-world scenario that caused 400 errors before the fix
+ * Regression tests for the pi-mono/OpenAI tool-pairing fix.
  */
 
-import { describe, test, expect, beforeAll } from "bun:test";
-import { applyPruningWorkflow } from "../src/workflow";
+import { beforeAll, describe, expect, test } from "bun:test";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { registerRule } from "../src/registry";
 import { deduplicationRule } from "../src/rules/deduplication";
-import { toolPairingRule } from "../src/rules/tool-pairing";
+import { errorPurgingRule } from "../src/rules/error-purging";
 import { recencyRule } from "../src/rules/recency";
+import { supersededWritesRule } from "../src/rules/superseded-writes";
+import { toolPairingRule } from "../src/rules/tool-pairing";
 import type { DcpConfigWithPruneRuleObjects } from "../src/types";
+import { applyPruningWorkflow } from "../src/workflow";
 
-describe("Fix Verification: Tool Use/Result Pairing", () => {
+describe("Fix Verification: pi-mono tool history", () => {
 	beforeAll(() => {
-		// Register rules
 		registerRule(deduplicationRule);
+		registerRule(supersededWritesRule);
+		registerRule(errorPurgingRule);
 		registerRule(toolPairingRule);
 		registerRule(recencyRule);
 	});
 
-	const realWorldMessages = [
-		{ role: "user", content: "Read the file" },
-		{
+	const assistantToolCall = (id: string, toolName = "read", args: Record<string, unknown> = { path: "test.txt" }) =>
+		({
 			role: "assistant",
 			content: [
-				{ type: "text", text: "I'll read it" },
-				{ 
-					type: "tool_use", 
-					id: "toolu_01VzLnitYpwspzkRMSc2bhfA", 
-					name: "read", 
-					input: { path: "test.txt" } 
-				},
+				{ type: "text", text: "Running tool." },
+				{ type: "toolCall", id, name: toolName, arguments: args },
 			],
-		},
-		{
-			role: "user",
-			content: [
-				{
-					type: "tool_result",
-					tool_use_id: "toolu_01VzLnitYpwspzkRMSc2bhfA",
-					content: "file contents",
-				},
-			],
-		},
-		{ role: "assistant", content: "Got it" },
-		{ role: "user", content: "Read it again" },
-		{
-			role: "assistant",
-			content: [
-				{ type: "text", text: "I'll read it" },
-				{ 
-					type: "tool_use", 
-					id: "toolu_01VzLnitYpwspzkRMSc2bhfA", 
-					name: "read", 
-					input: { path: "test.txt" } 
-				},
-			],
-		},
-		{
-			role: "user",
-			content: [
-				{
-					type: "tool_result",
-					tool_use_id: "toolu_01VzLnitYpwspzkRMSc2bhfA",
-					content: "file contents",
-				},
-			],
-		},
-	] as any;
+		} as AgentMessage);
 
-	const strictConfig: DcpConfigWithPruneRuleObjects = {
+	const toolResult = (
+		id: string,
+		toolName: string,
+		text: string,
+		overrides: Record<string, unknown> = {},
+	) =>
+		({
+			role: "toolResult",
+			toolCallId: id,
+			toolName,
+			content: text.length === 0 ? [] : [{ type: "text", text }],
+			isError: false,
+			timestamp: Date.now(),
+			...overrides,
+		} as AgentMessage);
+
+	const productionConfig: DcpConfigWithPruneRuleObjects = {
 		enabled: true,
-		debug: false, // Disable debug output in tests
-		rules: [deduplicationRule, toolPairingRule, recencyRule],
-		keepRecentCount: 0, // Don't protect anything - show pure pruning behavior
+		debug: false,
+		rules: [deduplicationRule, supersededWritesRule, errorPurgingRule, toolPairingRule, recencyRule],
+		keepRecentCount: 0,
 	};
 
-	test("should handle duplicate tool calls without breaking pairing", () => {
-		const result = applyPruningWorkflow(realWorldMessages, strictConfig);
-		
-		// Verify pairing integrity
-		const toolUseIds = new Set<string>();
-		
-		for (const msg of result) {
-			const content = Array.isArray(msg.content) ? msg.content : [];
-			const toolUses = content.filter((p: any) => p?.type === "tool_use");
-			
-			toolUses.forEach((tu: any) => toolUseIds.add(tu.id));
-		}
-		
-		for (const msg of result) {
-			const content = Array.isArray(msg.content) ? msg.content : [];
-			const toolResults = content.filter((p: any) => p?.type === "tool_result");
-			
-			for (const tr of toolResults) {
-				expect(toolUseIds.has(tr.tool_use_id)).toBe(true);
-			}
-		}
-	});
-
-	test("should prune duplicate messages but maintain at least one valid pair", () => {
-		const result = applyPruningWorkflow(realWorldMessages, strictConfig);
-		
-		expect(result.length).toBeLessThan(realWorldMessages.length);
-		
-		// Should still have at least one tool_use/tool_result pair
-		let hasToolUse = false;
-		let hasToolResult = false;
-		
-		for (const msg of result) {
-			const content = Array.isArray(msg.content) ? msg.content : [];
-			
-			if (content.some((p: any) => p?.type === "tool_use")) {
-				hasToolUse = true;
-			}
-			if (content.some((p: any) => p?.type === "tool_result")) {
-				hasToolResult = true;
-			}
-		}
-		
-		expect(hasToolUse).toBe(true);
-		expect(hasToolResult).toBe(true);
-	});
-
-	test("should prevent 400 API errors from orphaned tool_results", () => {
-		const result = applyPruningWorkflow(realWorldMessages, strictConfig);
-		
-		// This test verifies the core fix: no tool_result without corresponding tool_use
-		const toolUseIds = new Set<string>();
-		const orphanedResults: string[] = [];
-		
-		// First pass: collect all tool_use IDs
-		for (const msg of result) {
-			const content = Array.isArray(msg.content) ? msg.content : [];
-			const toolUses = content.filter((p: any) => p?.type === "tool_use");
-			toolUses.forEach((tu: any) => toolUseIds.add(tu.id));
-		}
-		
-		// Second pass: check for orphaned tool_results
-		for (const msg of result) {
-			const content = Array.isArray(msg.content) ? msg.content : [];
-			const toolResults = content.filter((p: any) => p?.type === "tool_result");
-			
-			for (const tr of toolResults) {
-				if (!toolUseIds.has(tr.tool_use_id)) {
-					orphanedResults.push(tr.tool_use_id);
+	function expectNoOrphanedToolResults(messages: AgentMessage[]) {
+		const toolCallIds = new Set<string>();
+		for (const message of messages) {
+			if (!("content" in message) || !Array.isArray(message.content)) continue;
+			for (const part of message.content as any[]) {
+				if (part?.type === "toolCall" && part.id) {
+					toolCallIds.add(part.id);
 				}
 			}
 		}
-		
-		expect(orphanedResults).toHaveLength(0);
+
+		for (const message of messages) {
+			if (message.role !== "toolResult") continue;
+			expect(toolCallIds.has((message as any).toolCallId)).toBe(true);
+		}
+	}
+
+	test("production rule order preserves pi-mono tool pairing", () => {
+		const messages: AgentMessage[] = [
+			{ role: "user", content: "Read the file" } as AgentMessage,
+			assistantToolCall("call_read_1"),
+			toolResult("call_read_1", "read", "contents"),
+			assistantToolCall("call_read_2"),
+			toolResult("call_read_2", "read", "contents again"),
+			{ role: "assistant", content: "Summary complete." } as AgentMessage,
+			{ role: "assistant", content: "Summary complete." } as AgentMessage,
+		];
+
+		const result = applyPruningWorkflow(messages, productionConfig);
+		expectNoOrphanedToolResults(result);
+		expect(result.length).toBeLessThan(messages.length);
 	});
 
-	test("should maintain message flow integrity", () => {
-		const result = applyPruningWorkflow(realWorldMessages, strictConfig);
-		
-		// Verify basic message structure is maintained
-		expect(result.length).toBeGreaterThan(0);
-		
-		// All messages should have valid roles
-		for (const msg of result) {
-			expect(['user', 'assistant']).toContain(msg.role);
-		}
-		
-		// Should not have completely empty content
-		for (const msg of result) {
-			if (Array.isArray(msg.content)) {
-				expect(msg.content.length).toBeGreaterThan(0);
-			} else {
-				expect(msg.content).toBeTruthy();
-			}
-		}
+	test("deduplication does not collapse tool-bearing messages with same assistant text", () => {
+		const config: DcpConfigWithPruneRuleObjects = {
+			enabled: true,
+			debug: false,
+			rules: [deduplicationRule, toolPairingRule],
+			keepRecentCount: 0,
+		};
+
+		const messages: AgentMessage[] = [
+			{ role: "user", content: "Read twice" } as AgentMessage,
+			assistantToolCall("call_1"),
+			toolResult("call_1", "read", "one"),
+			assistantToolCall("call_2"),
+			toolResult("call_2", "read", "two"),
+		];
+
+		const result = applyPruningWorkflow(messages, config);
+		const survivingResults = result.filter((message) => message.role === "toolResult");
+
+		expect(survivingResults).toHaveLength(2);
+		expectNoOrphanedToolResults(result);
 	});
 
-	test("should handle the specific error scenario from the real bug report", () => {
-		// This is the exact scenario that caused the 400 error
-		const problematicMessages = [
-			{ role: "user", content: "Read the file" },
-			{
-				role: "assistant", 
-				content: [
-					{ type: "text", text: "I'll read it" },
-					{ type: "tool_use", id: "toolu_ABC", name: "read", input: { path: "test.txt" } }
-				]
-			},
-			{
-				role: "user",
-				content: [{ type: "tool_result", tool_use_id: "toolu_ABC", content: "content" }]
-			},
-			// Duplicate that could cause orphaned result
-			{
-				role: "assistant", 
-				content: [
-					{ type: "text", text: "I'll read it" },
-					{ type: "tool_use", id: "toolu_ABC", name: "read", input: { path: "test.txt" } }
-				]
-			},
-			{
-				role: "user",
-				content: [{ type: "tool_result", tool_use_id: "toolu_ABC", content: "content" }]
-			}
-		] as any;
+	test("file-backed errored tool results can be pruned without orphaning remaining results", () => {
+		const config: DcpConfigWithPruneRuleObjects = {
+			enabled: true,
+			debug: false,
+			rules: [errorPurgingRule, toolPairingRule],
+			keepRecentCount: 0,
+		};
 
-		// This should not throw and should maintain pairing
-		const result = applyPruningWorkflow(problematicMessages, strictConfig);
-		
-		const toolUseIds = new Set<string>();
-		let allPairsValid = true;
-		
-		// Collect tool_use IDs
-		for (const msg of result) {
-			const content = Array.isArray(msg.content) ? msg.content : [];
-			content.forEach((part: any) => {
-				if (part?.type === "tool_use") {
-					toolUseIds.add(part.id);
-				}
-			});
-		}
-		
-		// Verify all tool_results have matching tool_use
-		for (const msg of result) {
-			const content = Array.isArray(msg.content) ? msg.content : [];
-			content.forEach((part: any) => {
-				if (part?.type === "tool_result") {
-					if (!toolUseIds.has(part.tool_use_id)) {
-						allPairsValid = false;
-					}
-				}
-			});
-		}
-		
-		expect(allPairsValid).toBe(true);
+		const messages: AgentMessage[] = [
+			{ role: "user", content: "Write the file" } as AgentMessage,
+			assistantToolCall("call_write_1", "write", { path: "out.txt", content: "old" }),
+			toolResult("call_write_1", "write", "failed", {
+				isError: true,
+				details: { path: "out.txt" },
+			}),
+			assistantToolCall("call_write_2", "write", { path: "out.txt", content: "new" }),
+			toolResult("call_write_2", "write", "ok", {
+				isError: false,
+				details: { path: "out.txt" },
+			}),
+		];
+
+		const result = applyPruningWorkflow(messages, config);
+		const survivingResults = result.filter((message) => message.role === "toolResult");
+
+		expect(survivingResults).toHaveLength(1);
+		expect((survivingResults[0] as any).toolCallId).toBe("call_write_2");
+		expectNoOrphanedToolResults(result);
+	});
+
+	test("superseded write results can be pruned without orphaning remaining results", () => {
+		const config: DcpConfigWithPruneRuleObjects = {
+			enabled: true,
+			debug: false,
+			rules: [supersededWritesRule, toolPairingRule],
+			keepRecentCount: 0,
+		};
+
+		const messages: AgentMessage[] = [
+			{ role: "user", content: "Write twice" } as AgentMessage,
+			assistantToolCall("call_write_1", "write", { path: "out.txt", content: "old" }),
+			toolResult("call_write_1", "write", "old written", {
+				details: { path: "out.txt" },
+			}),
+			assistantToolCall("call_write_2", "write", { path: "out.txt", content: "new" }),
+			toolResult("call_write_2", "write", "new written", {
+				details: { path: "out.txt" },
+			}),
+		];
+
+		const result = applyPruningWorkflow(messages, config);
+		const survivingResults = result.filter((message) => message.role === "toolResult");
+
+		expect(survivingResults).toHaveLength(1);
+		expect((survivingResults[0] as any).toolCallId).toBe("call_write_2");
+		expectNoOrphanedToolResults(result);
+	});
+
+	test("recency does not resurrect recent superseded tool results", () => {
+		const config: DcpConfigWithPruneRuleObjects = {
+			enabled: true,
+			debug: false,
+			rules: [supersededWritesRule, toolPairingRule, recencyRule],
+			keepRecentCount: 10,
+		};
+
+		const messages: AgentMessage[] = [
+			{ role: "user", content: "Write twice" } as AgentMessage,
+			assistantToolCall("call_write_1", "write", { path: "out.txt", content: "old" }),
+			toolResult("call_write_1", "write", "old written", {
+				details: { path: "out.txt" },
+			}),
+			assistantToolCall("call_write_2", "write", { path: "out.txt", content: "new" }),
+			toolResult("call_write_2", "write", "new written", {
+				details: { path: "out.txt" },
+			}),
+		];
+
+		const result = applyPruningWorkflow(messages, config);
+		const survivingResults = result.filter((message) => message.role === "toolResult");
+
+		expect(survivingResults).toHaveLength(1);
+		expect((survivingResults[0] as any).toolCallId).toBe("call_write_2");
+		expectNoOrphanedToolResults(result);
+	});
+
+	test("already-orphaned recent tool results are dropped even with recency enabled", () => {
+		const config: DcpConfigWithPruneRuleObjects = {
+			enabled: true,
+			debug: false,
+			rules: [deduplicationRule, supersededWritesRule, errorPurgingRule, toolPairingRule, recencyRule],
+			keepRecentCount: 10,
+		};
+
+		const messages: AgentMessage[] = [
+			{ role: "user", content: "Continue" } as AgentMessage,
+			toolResult("missing_call", "read", "orphaned output"),
+		];
+
+		const result = applyPruningWorkflow(messages, config);
+		expect(result.some((message) => message.role === "toolResult")).toBe(false);
+	});
+
+	test("empty-content tool results still remain paired", () => {
+		const messages: AgentMessage[] = [
+			{ role: "user", content: "Run screenshot tool" } as AgentMessage,
+			assistantToolCall("call_img", "screenshot", { path: "shot.png" }),
+			toolResult("call_img", "screenshot", ""),
+		];
+
+		const result = applyPruningWorkflow(messages, productionConfig);
+		expectNoOrphanedToolResults(result);
+		expect(result.some((message) => message.role === "toolResult")).toBe(true);
 	});
 });

@@ -2,8 +2,13 @@
   "name": "@zenobius/pi-dcp",
   "version": "0.1.0",
   "type": "module",
-  "description": "Dynamic Context Pruning extension for pi - intelligently removes obsolete messages to optimize token usage",
-  "main": "./index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist"
+  },
+
   "keywords": [
     "pi",
     "pi-extension",
@@ -19,7 +24,9 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "@mariozechner/pi-coding-agent": "file:../../pi-mono/packages/coding-agent",
+    "@mariozechner/pi-agent-core": "file:../../pi-mono/packages/agent"
   },
   "pi": {
     "extensions": [
@@ -27,6 +34,8 @@
     ]
   },
   "dependencies": {
-    "bunfig": "^0.15.6"
+    "bunfig": "^0.15.6",
+    "@mariozechner/pi-coding-agent": "file:../../pi-mono/packages/coding-agent",
+    "@mariozechner/pi-agent-core": "file:../../pi-mono/packages/agent"
   }
 }

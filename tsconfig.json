@@ -1,15 +1,34 @@
 {
   "compilerOptions": {
-    "lib": ["ESNext", "ES2022"],
     "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "outDir": "./dist",
+    "rootDir": ".",
     "strict": true,
-    "noEmit": true,
-    "skipLibCheck": true,
-    "noImplicitAny": true,
-    "allowImportingTsExtensions": true,
     "esModuleInterop": true,
-    "types": ["bun", "node"]
-  }
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmitOnError": false,
+    "paths": {
+      "@mariozechner/pi-agent-core": ["../../pi-mono/packages/agent"],
+      "@mariozechner/pi-coding-agent": ["../../pi-mono/packages/coding-agent"]
+    }
+  },
+  "include": [
+    "index.ts",
+    "programmatic.ts",
+    "src/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "tests"
+  ]
 }

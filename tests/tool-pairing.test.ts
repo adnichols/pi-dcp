@@ -1,234 +1,135 @@
 /**
- * Test suite for tool-pairing rule
- * 
- * Tests the tool pairing protection to ensure tool_use and tool_result pairs remain intact
+ * Test suite for pi-mono/OpenAI-style tool pairing support.
  */
 
-import { describe, test, expect, beforeAll } from "bun:test";
-import { applyPruningWorkflow } from "../src/workflow";
+import { beforeAll, describe, expect, test } from "bun:test";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { extractToolUseIds, hasToolResult, hasToolUse, hashMessage } from "../src/metadata";
 import { registerRule } from "../src/registry";
 import { deduplicationRule } from "../src/rules/deduplication";
-import { toolPairingRule } from "../src/rules/tool-pairing";
 import { recencyRule } from "../src/rules/recency";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { toolPairingRule } from "../src/rules/tool-pairing";
 import type { DcpConfigWithPruneRuleObjects } from "../src/types";
+import { applyPruningWorkflow } from "../src/workflow";
 
-describe("Tool Pairing Protection", () => {
+describe("Tool Pairing Protection (pi-mono shape)", () => {
 	beforeAll(() => {
-		// Register rules
 		registerRule(deduplicationRule);
 		registerRule(toolPairingRule);
 		registerRule(recencyRule);
 	});
 
-	const testMessages: AgentMessage[] = [
-		// Message 0: User request
-		{
-			role: "user",
-			content: "Please read the file",
-		} as AgentMessage,
+	const assistantWithToolCall = (id: string, text = "I'll read the file."): AgentMessage => ({
+		role: "assistant",
+		content: [
+			{ type: "text", text },
+			{ type: "toolCall", id, name: "read", arguments: { path: `${id}.txt` } },
+		],
+	} as AgentMessage);
 
-		// Message 1: Assistant with tool_use
-		{
-			role: "assistant",
-			content: [
-				{ type: "text", text: "I'll read the file for you." },
-				{
-					type: "tool_use",
-					id: "toolu_01ABC123",
-					name: "read",
-					input: { path: "test.txt" },
-				},
-			],
-		} as AgentMessage,
-
-		// Message 2: Tool result
-		{
-			role: "user",
-			content: [
-				{
-					type: "tool_result",
-					tool_use_id: "toolu_01ABC123",
-					content: "File contents here",
-				},
-			],
-		} as AgentMessage,
-
-		// Message 3: Another assistant message (duplicate of message 1 - should be pruned)
-		{
-			role: "assistant",
-			content: [
-				{ type: "text", text: "I'll read the file for you." },
-				{
-					type: "tool_use",
-					id: "toolu_01ABC123",
-					name: "read",
-					input: { path: "test.txt" },
-				},
-			],
-		} as AgentMessage,
-
-		// Message 4: Another tool result (duplicate - would be pruned but tool_use must stay)
-		{
-			role: "user",
-			content: [
-				{
-					type: "tool_result",
-					tool_use_id: "toolu_01ABC123",
-					content: "File contents here",
-				},
-			],
-		} as AgentMessage,
-
-		// Message 5: User message
-		{
-			role: "user",
-			content: "Thanks!",
-		} as AgentMessage,
-
-		// Message 6: Assistant with different tool_use
-		{
-			role: "assistant",
-			content: [
-				{ type: "text", text: "I'll write the file." },
-				{
-					type: "tool_use",
-					id: "toolu_01XYZ789",
-					name: "write",
-					input: { path: "output.txt", content: "data" },
-				},
-			],
-		} as AgentMessage,
-
-		// Message 7: Tool result for write
-		{
-			role: "user",
-			content: [
-				{
-					type: "tool_result",
-					tool_use_id: "toolu_01XYZ789",
-					content: "File written successfully",
-				},
-			],
-		} as AgentMessage,
-	];
+	const toolResult = (id: string, text: string): AgentMessage => ({
+		role: "toolResult",
+		toolCallId: id,
+		toolName: "read",
+		content: [{ type: "text", text }],
+		isError: false,
+		timestamp: Date.now(),
+	} as AgentMessage);
 
 	const config: DcpConfigWithPruneRuleObjects = {
 		enabled: true,
-		debug: false, // Disable debug output in tests
+		debug: false,
 		rules: [deduplicationRule, toolPairingRule, recencyRule],
-		keepRecentCount: 3, // Keep last 3 messages
+		keepRecentCount: 1,
 	};
 
-	test("should reduce message count through pruning", () => {
-		const result = applyPruningWorkflow(testMessages, config);
-		expect(result.length).toBeLessThan(testMessages.length);
+	test("metadata helpers recognize pi-mono tool calls and results", () => {
+		const assistant = assistantWithToolCall("call_1");
+		const result = toolResult("call_1", "file contents");
+
+		expect(hasToolUse(assistant)).toBe(true);
+		expect(hasToolResult(assistant)).toBe(false);
+		expect(extractToolUseIds(assistant)).toEqual(["call_1"]);
+
+		expect(hasToolUse(result)).toBe(false);
+		expect(hasToolResult(result)).toBe(true);
+		expect(extractToolUseIds(result)).toEqual(["call_1"]);
 	});
 
-	test("should maintain tool_use and tool_result pairing integrity", () => {
-		const result = applyPruningWorkflow(testMessages, config);
-		
-		const toolUseIds = new Set<string>();
-		const toolResultIds = new Set<string>();
+	test("hashMessage distinguishes tool-bearing pi-mono messages by call id", () => {
+		const assistant1 = assistantWithToolCall("call_1");
+		const assistant2 = assistantWithToolCall("call_2");
+		const result1 = toolResult("call_1", "same content");
+		const result2 = toolResult("call_2", "same content");
 
-		// Collect all tool_use IDs and tool_result IDs from result
-		for (const msg of result) {
-			if (Array.isArray(msg.content)) {
-				for (const part of msg.content as any[]) {
-					if (part?.type === "tool_use" && part.id) {
-						toolUseIds.add(part.id);
-					}
-					if (part?.type === "tool_result" && part.tool_use_id) {
-						toolResultIds.add(part.tool_use_id);
-					}
+		expect(hashMessage(assistant1)).not.toBe(hashMessage(assistant2));
+		expect(hashMessage(result1)).not.toBe(hashMessage(result2));
+	});
+
+	test("workflow never leaves surviving pi-mono tool results orphaned", () => {
+		const testMessages: AgentMessage[] = [
+			{ role: "user", content: "Please read two files" } as AgentMessage,
+			assistantWithToolCall("call_1"),
+			toolResult("call_1", "file one"),
+			assistantWithToolCall("call_2"),
+			toolResult("call_2", "file two"),
+			{ role: "assistant", content: "Done." } as AgentMessage,
+			{ role: "assistant", content: "Done." } as AgentMessage,
+		];
+
+		const result = applyPruningWorkflow(testMessages, config);
+		const toolCallIds = new Set<string>();
+
+		for (const message of result) {
+			if (!("content" in message) || !Array.isArray(message.content)) continue;
+			for (const part of message.content as any[]) {
+				if (part?.type === "toolCall" && part.id) {
+					toolCallIds.add(part.id);
 				}
 			}
 		}
 
-		// Every tool_result should have a matching tool_use
-		for (const toolResultId of toolResultIds) {
-			expect(toolUseIds.has(toolResultId)).toBe(true);
+		for (const message of result) {
+			if (message.role !== "toolResult") continue;
+			expect(toolCallIds.has((message as any).toolCallId)).toBe(true);
 		}
 	});
 
-	test("should not create orphaned tool_results", () => {
-		const result = applyPruningWorkflow(testMessages, config);
-		
-		let isValid = true;
-		const toolUseIds = new Set<string>();
+	test("multiple tool calls in one assistant message remain pairable", () => {
+		const messages: AgentMessage[] = [
+			{ role: "user", content: "Read both files" } as AgentMessage,
+			{
+				role: "assistant",
+				content: [
+					{ type: "text", text: "I'll read both." },
+					{ type: "toolCall", id: "call_a", name: "read", arguments: { path: "a.txt" } },
+					{ type: "toolCall", id: "call_b", name: "read", arguments: { path: "b.txt" } },
+				],
+			} as AgentMessage,
+			toolResult("call_a", "A"),
+			toolResult("call_b", "B"),
+			{ role: "assistant", content: "Complete." } as AgentMessage,
+			{ role: "assistant", content: "Complete." } as AgentMessage,
+		];
 
-		for (const msg of result) {
-			if (Array.isArray(msg.content)) {
-				// First pass: collect all tool_use IDs
-				for (const part of msg.content as any[]) {
-					if (part?.type === "tool_use" && part.id) {
-						toolUseIds.add(part.id);
-					}
+		const result = applyPruningWorkflow(messages, config);
+		const toolCallIds = new Set<string>();
+
+		for (const message of result) {
+			if (!("content" in message) || !Array.isArray(message.content)) continue;
+			for (const part of message.content as any[]) {
+				if (part?.type === "toolCall" && part.id) {
+					toolCallIds.add(part.id);
 				}
 			}
 		}
 
-		for (const msg of result) {
-			if (Array.isArray(msg.content)) {
-				// Second pass: verify all tool_results have matching tool_use
-				for (const part of msg.content as any[]) {
-					if (part?.type === "tool_result" && part.tool_use_id) {
-						if (!toolUseIds.has(part.tool_use_id)) {
-							isValid = false;
-						}
-					}
-				}
-			}
-		}
+		expect(toolCallIds.has("call_a")).toBe(true);
+		expect(toolCallIds.has("call_b")).toBe(true);
 
-		expect(isValid).toBe(true);
-	});
-
-	test("should preserve at least one tool_use/tool_result pair", () => {
-		const result = applyPruningWorkflow(testMessages, config);
-		
-		let hasToolUse = false;
-		let hasToolResult = false;
-
-		for (const msg of result) {
-			if (Array.isArray(msg.content)) {
-				for (const part of msg.content as any[]) {
-					if (part?.type === "tool_use") hasToolUse = true;
-					if (part?.type === "tool_result") hasToolResult = true;
-				}
-			}
-		}
-
-		expect(hasToolUse).toBe(true);
-		expect(hasToolResult).toBe(true);
-	});
-
-	test("should handle multiple different tool pairs correctly", () => {
-		const result = applyPruningWorkflow(testMessages, config);
-		
-		const toolUseIds = new Set<string>();
-		const toolResultIds = new Set<string>();
-
-		for (const msg of result) {
-			if (Array.isArray(msg.content)) {
-				for (const part of msg.content as any[]) {
-					if (part?.type === "tool_use" && part.id) {
-						toolUseIds.add(part.id);
-					}
-					if (part?.type === "tool_result" && part.tool_use_id) {
-						toolResultIds.add(part.tool_use_id);
-					}
-				}
-			}
-		}
-
-		// Should have preserved both tool types
-		expect(toolUseIds.size).toBeGreaterThan(0);
-		expect(toolResultIds.size).toBeGreaterThan(0);
-		
-		// All tool_results should have matching tool_use
-		for (const toolResultId of toolResultIds) {
-			expect(toolUseIds.has(toolResultId)).toBe(true);
+		for (const message of result) {
+			if (message.role !== "toolResult") continue;
+			expect(toolCallIds.has((message as any).toolCallId)).toBe(true);
 		}
 	});
 });
