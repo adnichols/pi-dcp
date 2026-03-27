@@ -2,14 +2,21 @@
 
 ![Monolith logo](pi-dcp-banner.png)
 
-Intelligently prunes conversation context to optimize token usage while preserving conversation coherence.
+Pi-DCP trims stale conversation context before each LLM call so long coding sessions stay cheaper and easier for the model to follow without breaking tool-call / tool-result replay safety.
 
-## Features
+## What it does
 
-- **Deduplication**: Removes duplicate tool outputs based on content hash
-- **Superseded Writes**: Removes older file writes when newer versions exist
-- **Error Purging**: Removes resolved errors from context
-- **Recency Protection**: Always preserves recent messages
+Pi-DCP now supports both **deletion** and **in-place redaction**:
+
+- removes duplicate plain messages
+- removes superseded `write` / `edit` results
+- removes or redacts resolved errors
+- removes or redacts older repeated `read` / `bash` results
+- protects recent messages unless provider safety requires deletion
+- protects configured tools and file paths from destructive cleanup
+- delays destructive cleanup until enough later completed user turns have passed
+- reports rough token savings and current-context composition
+- nudges the agent during long, noisy sessions
 
 ## Installation
 
@@ -19,160 +26,190 @@ Clone the repository into your pi agent extensions directory:
 git clone https://github.com/zenobi-us/pi-dcp.git ~/.pi/agent/extensions/pi-dcp
 ```
 
-## Usage
+## Commands
 
-The extension runs automatically on every LLM call. No manual intervention needed.
+- `/dcp-debug` - toggle debug logging
+- `/dcp-stats` - show session pruning/redaction counts plus estimated token savings
+- `/dcp-context` - show a rough live context breakdown and estimated DCP savings
+- `/dcp-toggle` - enable/disable the extension
+- `/dcp-recent <number>` - set how many recent messages are always protected
+- `/dcp-tools` - show expanded tool information
+- `/dcp-logs` - inspect extension logs
 
-### Commands
+## Configuration
 
-- `/dcp-debug` - Toggle debug logging
-- `/dcp-stats` - Show pruning statistics for current session
-- `/dcp-toggle` - Enable/disable the extension
-- `/dcp-recent <number>` - Set how many recent messages to always keep (default: 10)
+Pi-DCP loads config from project or user config files, package.json config keys, env vars, or defaults.
 
-### Flags
+Key options:
 
-- `--dcp-enabled=true/false` - Enable/disable extension at startup
-- `--dcp-debug=true/false` - Enable debug logging at startup
+```ts
+export default {
+  enabled: true,
+  debug: false,
+  rules: [
+    "deduplication",
+    "superseded-writes",
+    "error-purging",
+    "superseded-tool-results",
+    "tool-pairing",
+    "recency",
+  ],
+  keepRecentCount: 10,
+  protectedTools: [],
+  protectedFilePatterns: [],
+  ageGates: {
+    supersededToolResults: 0,
+    errorPurging: 0,
+    supersededWrites: 0,
+  },
+  redaction: {
+    supersededToolResults: false,
+    resolvedErrors: false,
+  },
+  nudge: {
+    enabled: true,
+    minMessages: 60,
+    minToolResults: 30,
+    minRepeatCount: 3,
+    minContextPercent: 70,
+    notify: true,
+    maxSummaryItems: 2,
+  },
+};
+```
+
+See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for details.
 
 ## Architecture
 
 ### Workflow
 
-1. **Prepare Phase**: Rules annotate message metadata
-2. **Process Phase**: Rules make pruning decisions based on metadata
-3. **Filter Phase**: Messages marked for pruning are removed
+Pi-DCP uses a five-step pipeline:
 
-### Built-in Rules
+1. **Prepare** - rules annotate metadata
+2. **Process** - rules choose `keep`, `prune`, or `redact`
+3. **Mutate** - redactions replace bulky payloads with compact placeholders
+4. **Filter** - pruned messages are removed
+5. **Report** - stats and status text are updated
 
-Located in `src/rules/`:
+### Rule ordering
 
-1. **Deduplication** (`deduplication.ts`)
-   - Prepare: Hash message content
-   - Process: Mark duplicates for pruning
+Default rule order is intentional:
 
-2. **Superseded Writes** (`superseded-writes.ts`)
-   - Prepare: Extract file paths from write/edit operations
-   - Process: Mark older writes to the same file for pruning
+1. `deduplication`
+2. `superseded-writes`
+3. `error-purging`
+4. `superseded-tool-results`
+5. `tool-pairing`
+6. `recency`
 
-3. **Error Purging** (`error-purging.ts`)
-   - Prepare: Identify errors and check if resolved
-   - Process: Mark resolved errors for pruning
+Why it matters:
 
-4. **Recency** (`recency.ts`)
-   - Process: Protect last N messages from pruning (overrides other rules)
+- cleanup rules decide what is obsolete
+- `tool-pairing` can still force provider-safety deletions for orphaned tool results
+- `recency` runs last so recent retained messages keep their full payloads instead of being pruned/redacted
 
-### Configuration
+### Matching repeated operations
 
-Default configuration in `src/config.ts`:
+Repeated-operation cleanup uses shared normalized signatures:
 
-```typescript
-{
-  enabled: true,
-  debug: false,
-  rules: ['deduplication', 'superseded-writes', 'error-purging', 'recency'],
-  keepRecentCount: 10
-}
+- `read` and `bash` use **exact normalized arguments**
+- `write` and `edit` use **shared path-based signatures**
+- protected tools/paths are excluded
+- different `read` slices or different `bash` timeouts no longer over-match
+
+### Age gating
+
+Age gates are measured in **completed later user turns**.
+A later user turn counts only if some later non-user reply/tool activity exists, so a trailing live user prompt does not age older context by itself.
+
+## Safety controls
+
+### Protected tools
+
+Use `protectedTools` to prevent destructive cleanup for specific tools:
+
+```ts
+protectedTools: ["read", "write"]
 ```
 
-## Custom Rules
+### Protected file paths
 
-Create custom pruning rules by implementing the `PruneRule` interface:
+Use `protectedFilePatterns` for exact paths or simple glob patterns:
 
-```typescript
-import type { PruneRule } from "./src/types";
+```ts
+protectedFilePatterns: [
+  "README.md",
+  "docs/**",
+  "src/**/*.ts",
+]
+```
 
-const myRule: PruneRule = {
-  name: 'my-custom-rule',
-  description: 'My custom pruning logic',
-  
-  prepare(msg, ctx) {
-    // Annotate metadata during prepare phase
-    msg.metadata.myScore = calculateScore(msg.message);
-  },
-  
-  process(msg, ctx) {
-    // Make pruning decision during process phase
-    if (msg.metadata.myScore < threshold) {
-      msg.metadata.shouldPrune = true;
-      msg.metadata.pruneReason = 'low score';
-    }
+### Redaction vs deletion
+
+- **Prune** removes the whole message
+- **Redact** keeps the message shell and tool identity, but replaces bulky payload text
+- redaction is currently used for older repeated tool results and resolved errors when enabled
+
+## Visibility
+
+Pi-DCP provides rough observability without a tokenizer dependency:
+
+- footer/status updates include prune/redaction counts and estimated token savings
+- `/dcp-stats` shows lifetime/session totals
+- `/dcp-context` shows the current role/token breakdown and tool-result payload pressure
+- long-session nudge text highlights repeated reads and repeated bash calls
+
+All token numbers are estimates based on a lightweight chars-per-token heuristic.
+
+## Custom rules
+
+Custom rules still implement the `PruneRule` interface, but can now express an action model:
+
+```ts
+const myRule = {
+  name: "my-rule",
+  process(msg) {
+    msg.metadata.action = "prune";
+    msg.metadata.pruneReason = "obsolete";
+
+    // or:
+    // msg.metadata.action = "redact";
+    // msg.metadata.redactionReason = "payload too large";
+    // msg.metadata.redactionKind = "custom";
   },
 };
 ```
 
-Then add to configuration: `rules: ['deduplication', myRule]`
+When writing custom rules:
+
+- avoid touching user messages unless you truly mean to
+- prefer `tool-pairing` and `recency` after destructive rules
+- treat redaction as destructive for recent-message semantics
+- preserve provider-required tool identity fields if you mutate tool results
 
 ## Development
 
-### Type Checking
+### Verification
 
 ```bash
-bun run typecheck
+bun test
+bun x tsc -p tsconfig.json --noEmit
+bun run build
 ```
 
-### Project Structure
+### Project structure
 
-```
-pi-dcp/
-├── index.ts              # Main extension entry point
-├── package.json          # Bun package config
-├── tsconfig.json         # TypeScript config
-├── src/
-│   ├── types.ts          # Core type definitions
-│   ├── config.ts         # Configuration management
-│   ├── metadata.ts       # Message metadata utilities
-│   ├── registry.ts       # Rule registration system
-│   ├── workflow.ts       # Prepare > Process > Filter workflow
-│   └── rules/
-│       ├── index.ts      # Export and register all rules
-│       ├── deduplication.ts
-│       ├── superseded-writes.ts
-│       ├── error-purging.ts
-│       └── recency.ts
-└── README.md
-```
-
-## How It Works
-
-1. **Context Event Hook**: The extension subscribes to the `context` event, which fires before each LLM call
-2. **Message Processing**: All messages are wrapped with metadata containers
-3. **Prepare Phase**: Each rule's `prepare` function annotates metadata (hashes, file paths, etc.)
-4. **Process Phase**: Each rule's `process` function makes pruning decisions based on metadata
-5. **Filter Phase**: Messages marked with `shouldPrune: true` are removed
-6. **Result**: Pruned message list is returned to pi and sent to the LLM
-
-## Benefits
-
-- **Token Savings**: Removes redundant and obsolete messages
-- **Cost Reduction**: Fewer tokens = lower API costs
-- **Preserved Coherence**: Smart rules keep important context
-- **Transparent**: No changes to user experience
-- **Configurable**: Adjust rules and thresholds as needed
-- **Extensible**: Easy to add custom rules
-
-## Example Output
-
-```
-[pi-dcp] Initialized with 4 rules: deduplication, superseded-writes, error-purging, recency
-[pi-dcp] Pruned 12 / 45 messages
-[pi-dcp] Pruned 8 / 52 messages
-```
-
-With debug mode enabled (`/dcp-debug`):
-
-```
-[pi-dcp] Dedup: marking duplicate message at index 15 (hash: k2l9x)
-[pi-dcp] SupersededWrites: found file operation at index 23: src/index.ts
-[pi-dcp] SupersededWrites: marking superseded write at index 23: src/index.ts
-[pi-dcp] ErrorPurging: found resolved error at index 31
-[pi-dcp] Recency: protecting message at index 48 (distance from end: 3, threshold: 10)
-[pi-dcp] Filter phase complete: 12 pruned, 33 kept (45 total)
-[pi-dcp] Pruned messages:
-  [15] assistant: duplicate content
-  [23] toolResult: superseded by later write to src/index.ts
-  [31] toolResult: error resolved by later success
-  ...
+```text
+src/
+  analysis.js
+  config.js
+  metadata.js
+  token-estimation.js
+  workflow.js
+  cmds/
+  events/
+  rules/
 ```
 
 ## License

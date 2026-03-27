@@ -17,6 +17,8 @@ export interface MessageWithMetadata {
 export interface MessageMetadata {
     /** Content hash for deduplication */
     hash?: string;
+    /** Resolved tool name when available */
+    toolName?: string;
     /** File path for superseded writes tracking */
     filePath?: string;
     /** File content version for superseded writes */
@@ -25,6 +27,24 @@ export interface MessageMetadata {
     isError?: boolean;
     /** Whether error was resolved by later success */
     errorResolved?: boolean;
+    /** Completed later user turns after this message */
+    laterCompletedUserTurns?: number;
+    /** Whether destructive cleanup is blocked by tool protection */
+    protectedTool?: boolean;
+    /** Whether destructive cleanup is blocked by file protection */
+    protectedFilePath?: boolean;
+    /** Why a destructive cleanup decision was blocked */
+    destructiveActionBlockedReason?: string;
+    /** Effective action selected by pruning rules */
+    action?: "keep" | "prune" | "redact";
+    /** Reason for redaction when action is redact */
+    redactionReason?: string;
+    /** Workflow-specific redaction strategy */
+    redactionKind?: string;
+    /** Optional replacement message prepared by a rule */
+    redactedMessage?: AgentMessage;
+    /** Whether a prune is required for provider safety */
+    providerSafetyPrune?: boolean;
     /** Recency score (distance from end) */
     recencyScore?: number;
     /** Whether protected by recency rule */
@@ -82,8 +102,33 @@ export interface DcpConfig {
     debug?: boolean;
     /** Always keep last N messages */
     keepRecentCount: number;
+    /** Tool names that normal cleanup rules must never prune/redact */
+    protectedTools?: string[];
+    /** File paths or glob patterns that normal cleanup rules must never prune/redact */
+    protectedFilePatterns?: string[];
+    /** Minimum completed later user turns required before destructive cleanup is allowed */
+    ageGates?: {
+        supersededToolResults?: number;
+        errorPurging?: number;
+        supersededWrites?: number;
+    };
+    /** Redaction feature toggles for action-aware workflow stages */
+    redaction?: {
+        supersededToolResults?: boolean;
+        resolvedErrors?: boolean;
+    };
     /** Optional log directory override */
     logDir?: string;
+    /** Optional long-session nudging configuration */
+    nudge?: {
+        enabled?: boolean;
+        minMessages?: number;
+        minToolResults?: number;
+        minRepeatCount?: number;
+        minContextPercent?: number;
+        notify?: boolean;
+        maxSummaryItems?: number;
+    };
 }
 export type DcpConfigWithPruneRuleObjects = DcpConfig & {
     rules: PruneRule[];
@@ -98,7 +143,37 @@ export type CommandDefinition = any;
 export interface StatsTracker {
     /** Total messages pruned */
     totalPruned: number;
+    /** Total messages redacted */
+    totalRedacted?: number;
     /** Total messages processed */
     totalProcessed: number;
+    /** Estimated tokens removed by pruning */
+    estimatedTokensPruned?: number;
+    /** Estimated tokens removed by redaction */
+    estimatedTokensRedacted?: number;
+    /** Estimated tokens saved in the last workflow run */
+    lastEstimatedTokensSaved?: number;
+    totalNudges?: number;
+    lastProcessed?: number;
+    lastPruned?: number;
+    lastRedacted?: number;
+    maxMessagesSeen?: number;
+    lastPressureSummary?: string;
+    lastContextSummary?: {
+        totalMessages: number;
+        estimatedTokens: number;
+        toolResultPayloadTokens: number;
+        roles: {
+            user: { messages: number; estimatedTokens: number };
+            assistant: { messages: number; estimatedTokens: number };
+            toolResult: { messages: number; estimatedTokens: number };
+            other: { messages: number; estimatedTokens: number };
+        };
+    };
+    lastNudge?: {
+        at: string;
+        summary: string;
+        totalMessages: number;
+    };
 }
 //# sourceMappingURL=types.d.ts.map

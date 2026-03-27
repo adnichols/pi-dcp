@@ -32,5 +32,6 @@ export { registerRule, getAllRules } from "./src/registry.js";
 export { deduplicationRule } from "./src/rules/deduplication.js";
 export { supersededWritesRule } from "./src/rules/superseded-writes.js";
 export { errorPurgingRule } from "./src/rules/error-purging.js";
+export { supersededToolResultsRule } from "./src/rules/superseded-tool-results.js";
 export { toolPairingRule } from "./src/rules/tool-pairing.js";
 export { recencyRule } from "./src/rules/recency.js";

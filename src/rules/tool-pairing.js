@@ -14,7 +14,7 @@
  *
  * This rule MUST run AFTER all other pruning rules to protect tool pairs.
  */
-import { extractToolUseIds, hasToolUse, hasToolResult } from "../metadata.js";
+import { clearDestructiveAction, extractToolUseIds, getMessageAction, hasToolUse, hasToolResult, markForPrune } from "../metadata.js";
 export const toolPairingRule = {
     name: "tool-pairing",
     description: "Preserve tool call/tool result pairing required by provider APIs",
@@ -39,7 +39,7 @@ function cascadePruneForward(msg, ctx) {
         return;
     if (!msg.metadata.toolUseIds || msg.metadata.toolUseIds.length === 0)
         return;
-    if (!msg.metadata.shouldPrune)
+    if (getMessageAction(msg.metadata) !== "prune")
         return;
     const toolUseIds = msg.metadata.toolUseIds;
     for (let i = ctx.index + 1; i < ctx.messages.length; i++) {
@@ -49,10 +49,11 @@ function cascadePruneForward(msg, ctx) {
         if (!nextMsg.metadata.toolUseIds)
             continue;
         const hasMatchingToolResult = toolUseIds.some((id) => nextMsg.metadata.toolUseIds?.includes(id));
-        if (!hasMatchingToolResult || nextMsg.metadata.shouldPrune)
+        if (!hasMatchingToolResult || getMessageAction(nextMsg.metadata) === "prune")
             continue;
-        nextMsg.metadata.shouldPrune = true;
-        nextMsg.metadata.pruneReason = "orphaned tool_result (tool call was pruned)";
+        markForPrune(nextMsg, "orphaned tool_result (tool call was pruned)", {
+            providerSafetyPrune: true,
+        });
         if (ctx.config.debug) {
             console.log(`[pi-dcp] Tool-pairing: cascade pruning tool_result at index ${i} ` +
                 `(tool call at index ${ctx.index} was pruned)`);
@@ -64,7 +65,7 @@ function cascadePruneForward(msg, ctx) {
  * If no matching tool call exists in history, prune the orphaned tool result.
  */
 function protectToolUseBackward(msg, ctx) {
-    if (!msg.metadata.hasToolResult || msg.metadata.shouldPrune)
+    if (!msg.metadata.hasToolResult || getMessageAction(msg.metadata) === "prune")
         return;
     if (!msg.metadata.toolUseIds || msg.metadata.toolUseIds.length === 0)
         return;
@@ -80,10 +81,9 @@ function protectToolUseBackward(msg, ctx) {
         if (!hasMatchingToolUse)
             continue;
         foundMatchingToolUse = true;
-        if (!prevMsg.metadata.shouldPrune)
+        if (getMessageAction(prevMsg.metadata) !== "prune")
             continue;
-        prevMsg.metadata.shouldPrune = false;
-        prevMsg.metadata.pruneReason = undefined;
+        clearDestructiveAction(prevMsg);
         prevMsg.metadata.protectedByToolPairing = true;
         if (ctx.config.debug) {
             console.log(`[pi-dcp] Tool-pairing: protecting tool call at index ${i} ` +
@@ -92,8 +92,9 @@ function protectToolUseBackward(msg, ctx) {
     }
     if (foundMatchingToolUse)
         return;
-    msg.metadata.shouldPrune = true;
-    msg.metadata.pruneReason = "orphaned tool_result (no matching tool call in history)";
+    markForPrune(msg, "orphaned tool_result (no matching tool call in history)", {
+        providerSafetyPrune: true,
+    });
     if (ctx.config.debug) {
         console.log(`[pi-dcp] Tool-pairing: pruning orphaned tool_result at index ${ctx.index} ` +
             `(no matching tool call found in history)`);

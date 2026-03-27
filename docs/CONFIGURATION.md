@@ -1,260 +1,282 @@
 # Configuration Guide
 
-Pi-DCP uses [bunfig](https://bunfig.sh) for flexible, type-safe configuration management.
+Pi-DCP uses a dependency-light config loader so it can run from a source checkout or symlinked extension directory without requiring an installed runtime config package.
 
-## Configuration Priority
+## Resolution order
 
-Configuration is loaded in the following priority order (highest to lowest):
+Highest to lowest priority:
 
-1. **CLI Flags** - Override any config value
-2. **Project Config** - `./dcp.config.ts` in current working directory
-3. **User Config** - `~/.dcprc` in home directory
-4. **Default Config** - Built-in defaults
+1. CLI flags (`--dcp-enabled`, `--dcp-debug`)
+2. Environment variables (`DCP_ENABLED`, `DCP_DEBUG`, `DCP_KEEP_RECENT_COUNT`, `DCP_RULES`)
+3. Project config file in the current working directory
+4. User config file in `~`
+5. `package.json` keys: `pi-dcp` or `dcp`
+6. Built-in defaults
 
-## Configuration File Formats
+## Supported config files
 
-Bunfig supports multiple configuration file formats:
+- `dcp.config.ts`
+- `dcp.config.mts`
+- `dcp.config.js`
+- `dcp.config.mjs`
+- `dcp.config.cjs`
+- `dcp.config.json`
+- `dcp.config.toml`
+- `dcp.config.yaml`
+- `dcp.config.yml`
+- `.dcprc`
+- `.dcprc.json`
+- `.dcprc.toml`
+- `.dcprc.yaml`
+- `.dcprc.yml`
 
-- **TypeScript**: `dcp.config.ts` (recommended, provides type safety)
-- **JavaScript**: `dcp.config.js`
-- **JSON**: `dcp.config.json` or `.dcprc.json`
-- **TOML**: `dcp.config.toml`
-- **YAML**: `dcp.config.yaml`
-- **RC File**: `.dcprc` (JSON format)
+## Config shape
 
-## Configuration Options
-
-```typescript
+```ts
 export interface DcpConfig {
-  // Enable/disable DCP entirely
-  enabled: boolean;
-
-  // Enable debug logging
-  debug: boolean;
-
-  // Rules to apply (in order)
-  rules: Array<string | PruningRule>;
-
-  // Number of recent messages to always keep
+  enabled?: boolean;
+  debug?: boolean;
   keepRecentCount: number;
+  protectedTools?: string[];
+  protectedFilePatterns?: string[];
+  ageGates?: {
+    supersededToolResults?: number;
+    errorPurging?: number;
+    supersededWrites?: number;
+  };
+  redaction?: {
+    supersededToolResults?: boolean;
+    resolvedErrors?: boolean;
+  };
+  logDir?: string;
+  nudge?: {
+    enabled?: boolean;
+    minMessages?: number;
+    minToolResults?: number;
+    minRepeatCount?: number;
+    minContextPercent?: number;
+    notify?: boolean;
+    maxSummaryItems?: number;
+  };
 }
 ```
 
-## Example Configurations
+## Default config
 
-### TypeScript (Recommended)
+```ts
+export default {
+  enabled: true,
+  debug: true,
+  rules: [
+    "deduplication",
+    "superseded-writes",
+    "error-purging",
+    "superseded-tool-results",
+    "tool-pairing",
+    "recency",
+  ],
+  keepRecentCount: 10,
+  protectedTools: [],
+  protectedFilePatterns: [],
+  ageGates: {
+    supersededToolResults: 0,
+    errorPurging: 0,
+    supersededWrites: 0,
+  },
+  redaction: {
+    supersededToolResults: false,
+    resolvedErrors: false,
+  },
+  nudge: {
+    enabled: true,
+    minMessages: 60,
+    minToolResults: 30,
+    minRepeatCount: 3,
+    minContextPercent: 70,
+    notify: true,
+    maxSummaryItems: 2,
+  },
+};
+```
 
-Create `dcp.config.ts`:
+## Option reference
 
-```typescript
-import type { DcpConfig } from "@pi-dcp/types";
+### `keepRecentCount`
+
+Number of trailing messages that recency always protects from normal prune/redact decisions.
+
+Provider-safety orphan cleanup from `tool-pairing` can still delete invalid tool results even when they are recent.
+
+### `protectedTools`
+
+Exact tool-name allowlist for destructive-action protection.
+
+```ts
+protectedTools: ["read", "write"]
+```
+
+If a message belongs to one of these tools, normal cleanup rules will not prune or redact it.
+
+### `protectedFilePatterns`
+
+Exact file paths or simple glob patterns that block normal prune/redact decisions.
+
+Supported pattern style is intentionally simple and dependency-free:
+
+- exact paths: `README.md`
+- segment wildcard: `src/*.ts`
+- recursive wildcard: `src/**/*.ts`
+- single-char wildcard: `file-?.txt`
+
+Paths are matched after slash normalization.
+
+### `ageGates`
+
+Minimum completed later user turns required before destructive cleanup can apply.
+
+```ts
+ageGates: {
+  supersededToolResults: 2,
+  errorPurging: 1,
+  supersededWrites: 3,
+}
+```
+
+A **completed later user turn** means a later user message that already has some later non-user reply/tool activity after it. A trailing live user prompt does not age older context by itself.
+
+### `redaction`
+
+Enable in-place redaction instead of full deletion for supported cleanup paths.
+
+```ts
+redaction: {
+  supersededToolResults: true,
+  resolvedErrors: true,
+}
+```
+
+Current behavior:
+
+- `supersededToolResults: true` keeps older repeated `read`/`bash` tool results but replaces bulky payloads with compact placeholders
+- `resolvedErrors: true` keeps resolved error messages but strips bulky error payload text
+
+### `nudge`
+
+Controls long-session prompt nudging and UI notifications.
+
+- `minMessages`: minimum conversation size before nudging
+- `minToolResults`: minimum tool-result count before nudging
+- `minRepeatCount`: repeated-operation count that qualifies as churn
+- `minContextPercent`: estimated context-window percentage threshold
+- `notify`: whether to emit UI notifications
+- `maxSummaryItems`: how many repeated reads/bash commands to include in the summary
+
+## Example configs
+
+### Conservative defaults with visibility only
+
+```ts
+import type { DcpConfig } from "~/.pi/agent/extensions/pi-dcp/src/types";
 
 export default {
   enabled: true,
   debug: false,
-  rules: [
-    "deduplication",
-    "superseded-writes",
-    "error-purging",
-    "recency"
-  ],
   keepRecentCount: 10,
 } satisfies DcpConfig;
 ```
 
-### JSON
+### Safe cleanup with protected docs and delayed pruning
 
-Create `.dcprc`:
+```ts
+import type { DcpConfig } from "~/.pi/agent/extensions/pi-dcp/src/types";
 
-```json
-{
-  "enabled": true,
-  "debug": false,
-  "rules": [
-    "deduplication",
-    "superseded-writes",
-    "error-purging",
-    "recency"
-  ],
-  "keepRecentCount": 10
-}
-```
-
-### TOML
-
-Create `dcp.config.toml`:
-
-```toml
-enabled = true
-debug = false
-rules = ["deduplication", "superseded-writes", "error-purging", "recency"]
-keepRecentCount = 10
-```
-
-## CLI Flags
-
-Override configuration values with CLI flags:
-
-```bash
-# Disable DCP for this session
-pi --dcp-enabled=false
-
-# Enable debug logging
-pi --dcp-debug=true
-
-# Combine flags
-pi --dcp-enabled=true --dcp-debug=true
-```
-
-## Runtime Commands
-
-DCP provides commands to adjust configuration during a session:
-
-- `/dcp-toggle` - Enable/disable DCP
-- `/dcp-debug` - Toggle debug logging
-- `/dcp-recent <number>` - Set number of recent messages to keep
-- `/dcp-stats` - Show pruning statistics
-
-## Available Rules
-
-Built-in pruning rules:
-
-1. **deduplication** - Remove duplicate tool outputs
-2. **superseded-writes** - Remove older file versions
-3. **error-purging** - Remove resolved errors
-4. **recency** - Always keep recent messages
-
-Rules are applied in the order specified in the `rules` array.
-
-## Configuration Locations
-
-### Project-Specific
-
-Best for team settings or project requirements:
-
-```bash
-# Create in project root
-cd /path/to/project
-touch dcp.config.ts
-```
-
-### User-Wide
-
-Best for personal preferences:
-
-```bash
-# Create in home directory
-touch ~/.dcprc
-```
-
-### Extension Default
-
-The extension includes a default configuration at:
-```
-devtools/files/pi/agent/extensions/pi-dcp/dcp.config.ts
-```
-
-This serves as a fallback and reference example.
-
-## Type Safety
-
-When using TypeScript configuration files, you get:
-
-- Autocomplete for configuration options
-- Type checking for values
-- IntelliSense documentation
-- Compile-time validation
-
-```typescript
-import type { DcpConfig } from "@pi-dcp/types";
-
-// Type error if you misspell or use wrong type
 export default {
-  enabled: "yes", // ❌ Type error: must be boolean
-  debugg: true,   // ❌ Type error: unknown property
-  rules: [],
-  keepRecentCount: -5, // ✅ Type-safe but validation will catch at runtime
+  keepRecentCount: 12,
+  protectedTools: ["write"],
+  protectedFilePatterns: ["docs/**", "README.md"],
+  ageGates: {
+    supersededToolResults: 2,
+    errorPurging: 1,
+    supersededWrites: 3,
+  },
 } satisfies DcpConfig;
 ```
+
+### Aggressive cleanup with redaction enabled
+
+```ts
+import type { DcpConfig } from "~/.pi/agent/extensions/pi-dcp/src/types";
+
+export default {
+  keepRecentCount: 8,
+  redaction: {
+    supersededToolResults: true,
+    resolvedErrors: true,
+  },
+  nudge: {
+    enabled: true,
+    minMessages: 40,
+    minToolResults: 20,
+    minRepeatCount: 2,
+    minContextPercent: 60,
+    notify: true,
+    maxSummaryItems: 3,
+  },
+} satisfies DcpConfig;
+```
+
+## Runtime commands
+
+- `/dcp-toggle`
+- `/dcp-debug`
+- `/dcp-recent <number>`
+- `/dcp-stats`
+- `/dcp-context`
+
+## Built-in rules
+
+1. `deduplication`
+2. `superseded-writes`
+3. `error-purging`
+4. `superseded-tool-results`
+5. `tool-pairing`
+6. `recency`
+
+Default ordering matters:
+
+- cleanup rules run first
+- `tool-pairing` enforces provider-safe tool call/result integrity
+- `recency` runs last and clears ordinary prune/redact actions for recent retained messages
+
+## Observability
+
+Pi-DCP exposes only rough token estimates.
+
+- `/dcp-stats` shows lifetime/session counts plus estimated tokens pruned/redacted
+- `/dcp-context` shows the current role/token breakdown and tool-result payload pressure
+- footer/status text includes the last run’s rough savings
+
+Token estimates use a lightweight chars/4 heuristic over serialized message payloads. They are directional, not billing-accurate.
 
 ## Troubleshooting
 
-### Configuration Not Loading
+### Config not loading
 
-1. Check file location and naming
-2. Ensure valid syntax (JSON/TOML/TypeScript)
-3. Enable debug mode: `--dcp-debug=true`
-4. Check console for error messages
+- verify file location/name
+- enable `--dcp-debug=true`
+- check for syntax errors in JSON/TOML/YAML/TS
+- look for `[pi-dcp] Loaded config from ...` in logs
 
-### Validation Errors
+### A tool result was kept unexpectedly
 
-If configuration fails validation, DCP will log the error and disable itself:
+Check, in order:
 
-```
-[pi-dcp] Configuration error: Unknown rule: "typo"
-[pi-dcp] Extension disabled due to configuration error
-```
+- whether the tool is in `protectedTools`
+- whether the file path matches `protectedFilePatterns`
+- whether the relevant `ageGates` threshold was met
+- whether `keepRecentCount` protected it
+- whether `tool-pairing` kept it for provider safety
 
-### Config File Discovery
+### A recent tool result was still deleted
 
-DCP searches for config files in this order:
-
-1. Current working directory
-2. Home directory
-3. Extension directory (default fallback)
-
-Use debug mode to see which config file is loaded:
-
-```bash
-pi --dcp-debug=true
-```
-
-## Advanced Usage
-
-### Custom Rule Order
-
-Change the order of rules to adjust pruning behavior:
-
-```typescript
-export default {
-  rules: [
-    "recency",           // Protect recent messages first
-    "error-purging",     // Then clean up errors
-    "deduplication",     // Then deduplicate
-    "superseded-writes"  // Finally remove old file versions
-  ],
-  keepRecentCount: 15,
-} satisfies DcpConfig;
-```
-
-### Minimal Configuration
-
-Only specify what you want to change from defaults:
-
-```typescript
-export default {
-  keepRecentCount: 20, // Only override this, use defaults for rest
-} satisfies DcpConfig;
-```
-
-### Disable Specific Rules
-
-```typescript
-export default {
-  rules: [
-    "deduplication",
-    // Omit "superseded-writes" to disable it
-    "error-purging",
-    "recency"
-  ],
-} satisfies DcpConfig;
-```
-
-## Best Practices
-
-1. **Use TypeScript configs** for type safety
-2. **Start with defaults** and adjust based on needs
-3. **Use project configs** for team settings
-4. **Use user configs** for personal preferences
-5. **Test with debug mode** when changing configuration
-6. **Monitor with `/dcp-stats`** to see pruning effectiveness
+That usually means `tool-pairing` detected an orphaned or otherwise provider-unsafe tool result. Recency does not override provider-safety deletions.

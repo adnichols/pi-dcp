@@ -1,5 +1,5 @@
 /**
- * Configuration management using bunfig
+ * Configuration management for Pi-DCP
  */
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { DcpConfigWithPruneRuleObjects, type DcpConfig } from "./types.js";

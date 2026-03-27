@@ -1,323 +1,181 @@
 ---
 name: pi-dcp
-description: Dynamic Context Pruning extension for pi. Expert guidance on using intelligent message pruning to optimize token usage while preserving conversation coherence.
+description: Dynamic Context Pruning extension for pi. Expert guidance on safe pruning, redaction, protection controls, token visibility, and long-session context hygiene.
 ---
 
 # Pi-DCP: Dynamic Context Pruning Expert
 
-You are an expert on the Pi-DCP (Dynamic Context Pruning) extension for pi. You help users understand and optimize context pruning for token efficiency.
+You are an expert on the Pi-DCP extension for pi. Help users configure, debug, and extend Pi-DCP without breaking provider-safe tool replay.
 
-## Core Concepts
+## Core model
 
-### What Pi-DCP Does
-
-Pi-DCP automatically removes obsolete and redundant messages from conversation context before each LLM call. This:
-
-- **Reduces token usage** - Fewer messages sent to the LLM
-- **Lowers costs** - Smaller prompts = cheaper API calls
-- **Preserves coherence** - Smart rules keep important context
-- **Works transparently** - No user intervention needed
-
-### Workflow: Prepare > Process > Filter
-
-1. **Prepare Phase**: Rules annotate message metadata (hashes, file paths, error status, etc.)
-2. **Process Phase**: Rules make pruning decisions based on metadata
-3. **Filter Phase**: Messages marked for pruning are removed
-
-### Built-in Rules
-
-**Deduplication**
-- Removes duplicate tool outputs based on content hash
-- Keeps first occurrence, prunes later duplicates
-- Never prunes user messages
-
-**Superseded Writes**
-- Removes older file write/edit operations when newer versions exist
-- Tracks file paths and versions
-- Only keeps the latest write to each file
-
-**Error Purging**
-- Removes resolved errors from context
-- Identifies errors followed by successful retries
-- Keeps unresolved errors for context
-
-**Recency Protection**
-- Always preserves recent messages (default: last 10)
-- Overrides other pruning decisions
-- Configurable threshold
-
-## Usage Guidance
-
-### Commands
-
-Tell users about these commands:
-
-- `/dcp-debug` - Toggle debug logging to see what's being pruned
-- `/dcp-stats` - Show pruning statistics for current session
-- `/dcp-toggle` - Enable/disable the extension
-- `/dcp-recent <number>` - Adjust recency threshold (default: 10)
-
-### When to Use Debug Mode
-
-Recommend `/dcp-debug` when:
-- User suspects important context is being pruned
-- Investigating unexpected LLM behavior
-- Understanding what the extension is doing
-- Tuning configuration
+Pi-DCP reduces long-session context churn before each LLM call.
 
-### When to Adjust Recency Threshold
+It now has a three-way action model:
 
-Recommend changing `keepRecentCount`:
-- **Increase** (e.g., `/dcp-recent 20`) if:
-  - LLM seems to forget recent context
-  - Working on complex multi-step tasks
-  - Need more working memory
-  
-- **Decrease** (e.g., `/dcp-recent 5`) if:
-  - Token usage is still too high
-  - Conversation is very repetitive
-  - Most context is in recent messages anyway
+- **keep** - retain the full message
+- **prune** - remove the whole message
+- **redact** - keep the message shell but replace bulky payload text with a compact placeholder
 
-### When to Disable
+## Workflow
 
-Recommend `/dcp-toggle` to disable when:
-- Debugging issues and want to see full context
-- Working on tasks where all history matters
-- Testing if pruning is causing problems
+Pi-DCP uses:
 
-## Custom Rules
+1. **Prepare** - annotate metadata
+2. **Process** - choose `keep`, `prune`, or `redact`
+3. **Mutate** - apply redactions
+4. **Filter** - remove pruned messages
+5. **Report** - update session stats and status text
 
-### Creating Custom Rules
+## Built-in rules
 
-Guide users on implementing `PruneRule`:
+### `deduplication`
+- prunes duplicate non-tool messages
+- intentionally skips tool-bearing messages
 
-```typescript
-import type { PruneRule } from "~/.pi/agent/extensions/pi-dcp/src/types";
+### `superseded-writes`
+- prunes older successful `write` / `edit` results when a later successful result for the same path exists
+- uses shared path-based signatures
 
-const myRule: PruneRule = {
-  name: 'my-rule-name',
-  description: 'What this rule does',
-  
-  // Optional: Annotate metadata
-  prepare(msg, ctx) {
-    // Access: msg.message (original message)
-    //         msg.metadata (metadata object to annotate)
-    //         ctx.messages (all messages)
-    //         ctx.index (current message index)
-    //         ctx.config (configuration)
-    
-    msg.metadata.myScore = calculateScore(msg.message);
-  },
-  
-  // Optional: Make pruning decisions
-  process(msg, ctx) {
-    // Check if already pruned
-    if (msg.metadata.shouldPrune) return;
-    
-    // Never prune user messages
-    if (msg.message.role === 'user') return;
-    
-    // Make decision
-    if (msg.metadata.myScore < threshold) {
-      msg.metadata.shouldPrune = true;
-      msg.metadata.pruneReason = 'low score';
-    }
-  },
-};
-```
+### `error-purging`
+- removes or redacts resolved errors
+- age-gated and protection-aware
 
-### Rule Design Patterns
+### `superseded-tool-results`
+- removes or redacts older repeated successful `read` / `bash` tool results
+- uses normalized exact argument signatures
+- different `read` slices or different `bash` options should not over-match
 
-**Prepare-only rules**: Annotate metadata for other rules to use
+### `tool-pairing`
+- enforces tool call / tool result integrity
+- may still delete orphaned tool results even when recency is enabled
 
-**Process-only rules**: Make decisions based on metadata from prepare phase
+### `recency`
+- runs last
+- clears ordinary prune/redact actions for recent retained messages
+- does **not** override provider-safety deletions from `tool-pairing`
 
-**Two-phase rules**: Annotate in prepare, decide in process (most common)
+## Key configuration controls
 
-**Protective rules**: Override pruning decisions (like recency)
+### Protection
 
-### Metadata Fields
+- `protectedTools: string[]`
+- `protectedFilePatterns: string[]`
 
-Standard metadata fields:
-- `hash` - Content hash for deduplication
-- `filePath` - File path for superseded writes
-- `fileVersion` - Version hash for file tracking
-- `isError` - Whether message is an error
-- `errorResolved` - Whether error was resolved
-- `protectedByRecency` - Protected by recency rule
-- `shouldPrune` - Final pruning decision (boolean)
-- `pruneReason` - Why it should be pruned (string)
+These block normal prune/redact decisions.
 
-Custom rules can add any fields.
+File patterns support dependency-free exact/`*`/`**`/`?` matching on normalized slash paths.
 
-## Troubleshooting
+### Age gates
 
-### "LLM forgot recent context"
-
-1. Check recency threshold: `/dcp-recent 15` to increase
-2. Enable debug: `/dcp-debug` to see what's being pruned
-3. Check if important messages are within recency window
-
-### "Still using too many tokens"
-
-1. Check stats: `/dcp-stats` to see pruning rate
-2. Consider adding custom rules for domain-specific pruning
-3. Reduce recency threshold if safe: `/dcp-recent 5`
-
-### "Extension not working"
-
-1. Check if enabled: `/dcp-toggle` twice (off then on)
-2. Look for initialization message in logs
-3. Check for configuration errors in console
-
-### "Rule not found error"
-
-Rules must be registered before use. Built-in rules auto-register when extension loads.
-
-For custom rules, ensure they're registered:
-```typescript
-import { registerRule } from "~/.pi/agent/extensions/pi-dcp/src/registry";
-registerRule(myRule);
-```
-
-## Best Practices
-
-### Configuration
-
-- Start with defaults (4 built-in rules, keepRecentCount: 10)
-- Enable debug mode initially to understand behavior
-- Tune recency threshold based on use case
-- Add custom rules for domain-specific patterns
-
-### Rule Order
-
-Rules are applied in the order configured. Standard order:
-1. Deduplication
-2. Superseded Writes
-3. Error Purging
-4. Recency (should be last to override)
-
-Recency should typically be last since it protects messages.
-
-### Performance
-
-- Prepare phase should be fast (just annotation)
-- Avoid expensive computation in prepare/process
-- Process phase runs for every rule on every message
-- Keep rule count reasonable (4-8 rules is typical)
-
-## Example Scenarios
-
-### Scenario: Long File Editing Session
-
-User has edited `src/app.ts` 20 times. Without DCP, all 20 write operations are in context.
-
-**Pi-DCP behavior**:
-- Superseded Writes rule keeps only the latest write
-- Saves 19 message slots
-- LLM sees current file state, not full history
-
-### Scenario: Debugging with Retries
-
-User encountered an error, retried 5 times, finally succeeded.
-
-**Pi-DCP behavior**:
-- Error Purging rule removes the 5 failed attempts
-- Keeps only the successful result
-- LLM focuses on solution, not failure history
-
-### Scenario: Repetitive Tool Calls
-
-User ran `ls` 10 times in the same directory.
-
-**Pi-DCP behavior**:
-- Deduplication rule keeps only first `ls` result
-- Prunes 9 duplicate outputs
-- Saves tokens on redundant information
-
-## Advanced Topics
-
-### State Tracking
-
-Rules can track state across prepare/process:
-
-```typescript
-const seenFiles = new Set<string>();
-
-const rule: PruneRule = {
-  name: 'track-files',
-  prepare(msg, ctx) {
-    const path = extractFilePath(msg.message);
-    if (path) {
-      msg.metadata.isFirstSeen = !seenFiles.has(path);
-      seenFiles.add(path);
-    }
-  },
-};
-```
-
-Note: State resets each time workflow runs (each LLM call).
-
-### Multi-Rule Coordination
-
-Rules can check metadata from other rules:
-
-```typescript
-process(msg, ctx) {
-  // Check if another rule already marked it
-  if (msg.metadata.shouldPrune) return;
-  
-  // Use metadata from deduplication rule
-  if (msg.metadata.hash === targetHash) {
-    // ...
-  }
+```ts
+ageGates: {
+  supersededToolResults: number;
+  errorPurging: number;
+  supersededWrites: number;
 }
 ```
 
-### Conditional Pruning
+Age is measured in **completed later user turns**:
+- a later user message counts only if some later non-user reply/tool activity exists after it
+- a trailing live user prompt does not age older context by itself
 
-Rules can make context-aware decisions:
+### Redaction
 
-```typescript
-process(msg, ctx) {
-  // Only prune if many similar messages exist
-  const similar = ctx.messages.filter(m => 
-    m.metadata.category === msg.metadata.category
-  );
-  
-  if (similar.length > 10) {
-    msg.metadata.shouldPrune = true;
-  }
+```ts
+redaction: {
+  supersededToolResults: boolean;
+  resolvedErrors: boolean;
 }
 ```
 
-## Integration with Pi
+Current redaction behavior is conservative:
+- superseded tool results become compact placeholders that preserve tool identity
+- resolved errors keep a compact summary when useful, while bulky payload text is stripped
 
-Pi-DCP hooks into the `context` event, which fires before every LLM call. This means:
+## Observability
 
-- Pruning happens automatically
-- No changes to pi's core behavior
-- Works with all models and tools
-- Transparent to the user (unless debug enabled)
+Tell users about:
 
-The extension is fail-safe: if any error occurs, original messages are returned unchanged.
+- `/dcp-stats` - lifetime/session counts plus estimated tokens pruned/redacted
+- `/dcp-context` - live role/token breakdown for the current session
+- footer/status text - latest prune/redact counts and rough token savings
+- long-session nudge text - repeated reads/bash pressure summary
 
-## Future Enhancements
+All token numbers are rough estimates from a lightweight chars/4 heuristic, not billing-accurate tokenizer output.
 
-Potential features to suggest:
-- Per-rule statistics
-- Interactive rule configuration UI
-- Rule performance metrics
-- Visualization of pruning decisions
-- Export/import rule configurations
-- LLM-assisted pruning (expensive but intelligent)
+## Debugging guidance
 
-## Summary
+When users think Pi-DCP removed something important, check these in order:
 
-Pi-DCP is a **transparent, configurable, extensible** context pruning system that:
-- Reduces token usage through intelligent pruning
-- Preserves conversation coherence with smart rules
-- Requires no user intervention (but offers control when needed)
-- Supports custom rules for domain-specific optimization
+1. was the message recent enough for `recency` to keep?
+2. was it protected by `protectedTools` or `protectedFilePatterns`?
+3. was the relevant age gate satisfied?
+4. was it only redacted rather than fully pruned?
+5. did `tool-pairing` delete it for provider safety?
 
-Guide users to start with defaults, enable debug mode to understand behavior, then tune configuration and add custom rules as needed.
+Recommend `/dcp-debug` when users need to understand which rule acted.
+
+## Rule-order guidance
+
+Default order:
+
+1. `deduplication`
+2. `superseded-writes`
+3. `error-purging`
+4. `superseded-tool-results`
+5. `tool-pairing`
+6. `recency`
+
+If users customize order, remind them:
+- `tool-pairing` should stay near the end
+- `recency` should stay last
+- destructive cleanup should happen before protective overrides
+
+## Extending Pi-DCP
+
+Custom rules can still write `msg.metadata.shouldPrune`, but the preferred model is:
+
+```ts
+msg.metadata.action = "prune";
+msg.metadata.pruneReason = "obsolete";
+
+// or
+msg.metadata.action = "redact";
+msg.metadata.redactionReason = "payload too large";
+msg.metadata.redactionKind = "custom";
+```
+
+When advising on custom rules:
+- avoid pruning user messages unless explicitly intended
+- preserve provider-required tool identity fields if redacting tool results
+- treat redaction as destructive for recency semantics
+- expect `tool-pairing` to win on provider safety
+
+## Common recommendations
+
+### When token usage is still too high
+- lower `keepRecentCount` carefully
+- enable redaction for repeated tool results/errors
+- add age gates only where immediate cleanup is too aggressive
+- use `/dcp-stats` and `/dcp-context` to see where context cost lives
+
+### When Pi-DCP feels too aggressive
+- increase `keepRecentCount`
+- add `protectedTools`
+- add `protectedFilePatterns`
+- increase relevant `ageGates`
+- keep redaction enabled if users want continuity without full payload bloat
+
+### When users care about auditing or continuity
+- prefer redaction over deletion for repeated tool results and resolved errors
+- use `/dcp-context` to inspect current tool-result payload pressure
+
+## Short summary to give users
+
+Pi-DCP is a provider-safe context hygiene layer for pi that can now:
+- protect important tools/paths
+- delay cleanup by turn age
+- redact bulky stale payloads instead of deleting everything
+- match repeated `read`/`bash` operations more precisely
+- show rough token impact through `/dcp-stats` and `/dcp-context`

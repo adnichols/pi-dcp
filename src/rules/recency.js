@@ -10,6 +10,7 @@
  * This rule should typically run LAST in the process phase to override
  * other pruning decisions for recent messages.
  */
+import { clearDestructiveAction, getMessageAction } from "../metadata.js";
 export const recencyRule = {
     name: "recency",
     description: "Always preserve recent messages from pruning",
@@ -17,18 +18,20 @@ export const recencyRule = {
         const distanceFromEnd = ctx.messages.length - ctx.index - 1;
         if (distanceFromEnd >= ctx.config.keepRecentCount)
             return;
-        if (msg.metadata.hasToolResult && msg.metadata.shouldPrune) {
+        const action = getMessageAction(msg.metadata);
+        if (msg.metadata.providerSafetyPrune && action === "prune") {
             if (ctx.config.debug) {
-                console.log(`[pi-dcp] Recency: not protecting pruned tool_result at index ${ctx.index} ` +
+                console.log(`[pi-dcp] Recency: not protecting provider-safety prune at index ${ctx.index} ` +
                     `(distance from end: ${distanceFromEnd}, threshold: ${ctx.config.keepRecentCount})`);
             }
             return;
         }
-        const wasPruned = msg.metadata.shouldPrune;
-        msg.metadata.shouldPrune = false;
-        msg.metadata.pruneReason = undefined;
+        const hadDestructiveAction = action === "prune" || action === "redact";
+        if (hadDestructiveAction) {
+            clearDestructiveAction(msg);
+        }
         msg.metadata.protectedByRecency = true;
-        if (ctx.config.debug && wasPruned) {
+        if (ctx.config.debug && hadDestructiveAction) {
             console.log(`[pi-dcp] Recency: protecting message at index ${ctx.index} ` +
                 `(distance from end: ${distanceFromEnd}, threshold: ${ctx.config.keepRecentCount})`);
         }

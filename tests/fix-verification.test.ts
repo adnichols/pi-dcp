@@ -2,6 +2,8 @@
  * Regression tests for the pi-mono/OpenAI tool-pairing fix.
  */
 
+/// <reference path="./test-shims.d.ts" />
+
 import { beforeAll, describe, expect, test } from "bun:test";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { registerRule } from "../src/registry";
@@ -168,7 +170,7 @@ describe("Fix Verification: pi-mono tool history", () => {
 		expectNoOrphanedToolResults(result);
 	});
 
-	test("recency does not resurrect recent superseded tool results", () => {
+	test("recency preserves recent superseded tool results unless provider safety requires deletion", () => {
 		const config: DcpConfigWithPruneRuleObjects = {
 			enabled: true,
 			debug: false,
@@ -191,8 +193,8 @@ describe("Fix Verification: pi-mono tool history", () => {
 		const result = applyPruningWorkflow(messages, config);
 		const survivingResults = result.filter((message) => message.role === "toolResult");
 
-		expect(survivingResults).toHaveLength(1);
-		expect((survivingResults[0] as any).toolCallId).toBe("call_write_2");
+		expect(survivingResults).toHaveLength(2);
+		expect(survivingResults.map((message) => (message as any).toolCallId)).toEqual(["call_write_1", "call_write_2"]);
 		expectNoOrphanedToolResults(result);
 	});
 

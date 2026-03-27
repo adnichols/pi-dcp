@@ -5,7 +5,7 @@
  * Tool-bearing messages are skipped because pruning whole tool-call or tool-result
  * messages can break provider-level pairing invariants.
  */
-import { hashMessage, isToolBearingMessage } from "../metadata.js";
+import { hasDestructiveAction, hashMessage, isToolBearingMessage, markForPrune } from "../metadata.js";
 export const deduplicationRule = {
     name: "deduplication",
     description: "Remove duplicate non-tool messages based on content hash",
@@ -13,7 +13,7 @@ export const deduplicationRule = {
         msg.metadata.hash = hashMessage(msg.message);
     },
     process(msg, ctx) {
-        if (msg.metadata.shouldPrune)
+        if (hasDestructiveAction(msg.metadata))
             return;
         // Never prune user messages.
         if (msg.message.role === "user")
@@ -29,8 +29,7 @@ export const deduplicationRule = {
             .some((m) => !isToolBearingMessage(m.message) && m.metadata.hash === currentHash);
         if (!seenBefore)
             return;
-        msg.metadata.shouldPrune = true;
-        msg.metadata.pruneReason = "duplicate content";
+        markForPrune(msg, "duplicate content");
         if (ctx.config.debug) {
             console.log(`[pi-dcp] Dedup: marking duplicate message at index ${ctx.index} (hash: ${currentHash})`);
         }

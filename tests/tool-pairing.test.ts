@@ -2,6 +2,8 @@
  * Test suite for pi-mono/OpenAI-style tool pairing support.
  */
 
+/// <reference path="./test-shims.d.ts" />
+
 import { beforeAll, describe, expect, test } from "bun:test";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { extractToolUseIds, hasToolResult, hasToolUse, hashMessage } from "../src/metadata";

@@ -1,19 +1,17 @@
 /**
- * Configuration management with zero-install fallbacks.
+ * Configuration management without external runtime dependencies.
  *
  * Pi loads local extensions directly from source, which means npm dependencies
  * are not guaranteed to be installed inside ~/.pi/agent/extensions/<name>.
  *
- * The original implementation imported `bunfig` at module load time, which made
- * the entire extension fail to load when node_modules was absent.
- *
  * This loader keeps the same user-facing config behavior for the common cases
- * (project config, home config, CLI/env overrides) without requiring any local
- * package installation.
+ * (project config, home config, package.json config, CLI/env overrides) without
+ * requiring any local package installation.
  */
-import { access, readFile, rm, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { access, readFile, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, extname, join } from "node:path";
+import { dirname, extname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { isPruneRuleObject } from "./types.js";
 import { getRule, getRuleNames } from "./registry.js";
@@ -23,183 +21,47 @@ import { getRule, getRuleNames } from "./registry.js";
 const DEFAULT_CONFIG = {
     enabled: true,
     debug: true,
-    rules: ["deduplication", "superseded-writes", "error-purging", "tool-pairing", "recency"],
+    rules: ["deduplication", "superseded-writes", "error-purging", "superseded-tool-results", "tool-pairing", "recency"],
     keepRecentCount: 10,
+    protectedTools: [],
+    protectedFilePatterns: [],
+    ageGates: {
+        supersededToolResults: 0,
+        errorPurging: 0,
+        supersededWrites: 0,
+    },
+    redaction: {
+        supersededToolResults: false,
+        resolvedErrors: false,
+    },
+    nudge: {
+        enabled: true,
+        minMessages: 60,
+        minToolResults: 30,
+        minRepeatCount: 3,
+        minContextPercent: 70,
+        notify: true,
+        maxSummaryItems: 2,
+    },
 };
-const PROJECT_CONFIG_CANDIDATES = [
+const CONFIG_FILE_NAMES = [
     "dcp.config.ts",
-    "dcp.config.js",
     "dcp.config.mts",
-    "dcp.config.mjs",
     "dcp.config.cts",
+    "dcp.config.js",
+    "dcp.config.mjs",
     "dcp.config.cjs",
     "dcp.config.json",
+    "dcp.config.toml",
+    "dcp.config.yaml",
+    "dcp.config.yml",
     ".dcprc",
     ".dcprc.json",
-    "package.json",
+    ".dcprc.toml",
+    ".dcprc.yaml",
+    ".dcprc.yml",
 ];
-const HOME_CONFIG_CANDIDATES = [
-    ".dcprc",
-    ".dcprc.json",
-    "dcp.config.ts",
-    "dcp.config.js",
-    "dcp.config.mts",
-    "dcp.config.mjs",
-    "dcp.config.cts",
-    "dcp.config.cjs",
-    "dcp.config.json",
-    "package.json",
-];
-function isPlainObject(value) {
-    return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function parseBoolean(value) {
-    if (typeof value === "boolean") {
-        return value;
-    }
-    if (typeof value !== "string") {
-        return undefined;
-    }
-    const normalized = value.trim().toLowerCase();
-    if (["1", "true", "yes", "on"].includes(normalized)) {
-        return true;
-    }
-    if (["0", "false", "no", "off"].includes(normalized)) {
-        return false;
-    }
-    return undefined;
-}
-function parseNumber(value) {
-    if (typeof value === "number" && Number.isFinite(value)) {
-        return value;
-    }
-    if (typeof value !== "string") {
-        return undefined;
-    }
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : undefined;
-}
-function looksLikeJson(raw) {
-    const trimmed = raw.trim();
-    return trimmed.startsWith("{") || trimmed.startsWith("[");
-}
-async function pathExists(path) {
-    try {
-        await access(path);
-        return true;
-    }
-    catch {
-        return false;
-    }
-}
-async function importConfigModule(path, raw) {
-    const extension = extname(path);
-    if (extension) {
-        const imported = await import(`${pathToFileURL(path).href}?t=${Date.now()}`);
-        return imported.default ?? imported;
-    }
-    const tempPath = join(dirname(path), `.${basename(path)}.pi-dcp-load-${process.pid}-${Date.now()}.ts`);
-    await writeFile(tempPath, raw, "utf-8");
-    try {
-        const imported = await import(`${pathToFileURL(tempPath).href}?t=${Date.now()}`);
-        return imported.default ?? imported;
-    }
-    finally {
-        await rm(tempPath, { force: true });
-    }
-}
-async function loadConfigObject(path) {
-    const raw = await readFile(path, "utf-8");
-    const fileName = basename(path);
-    if (fileName === "package.json") {
-        const parsed = JSON.parse(raw);
-        return parsed.dcp ?? parsed["pi-dcp"] ?? null;
-    }
-    if (looksLikeJson(raw)) {
-        return JSON.parse(raw);
-    }
-    return importConfigModule(path, raw);
-}
-async function findConfigFile(cwd) {
-    for (const candidate of PROJECT_CONFIG_CANDIDATES) {
-        const path = join(cwd, candidate);
-        if (!await pathExists(path)) {
-            continue;
-        }
-        if (candidate === "package.json") {
-            try {
-                const packageConfig = await loadConfigObject(path);
-                if (packageConfig) {
-                    return { path, config: packageConfig };
-                }
-            }
-            catch (error) {
-                throw new Error(`Failed to load ${path}: ${error instanceof Error ? error.message : String(error)}`);
-            }
-            continue;
-        }
-        return { path, config: await loadConfigObject(path) };
-    }
-    for (const candidate of HOME_CONFIG_CANDIDATES) {
-        const path = join(homedir(), candidate);
-        if (!await pathExists(path)) {
-            continue;
-        }
-        if (candidate === "package.json") {
-            try {
-                const packageConfig = await loadConfigObject(path);
-                if (packageConfig) {
-                    return { path, config: packageConfig };
-                }
-            }
-            catch (error) {
-                throw new Error(`Failed to load ${path}: ${error instanceof Error ? error.message : String(error)}`);
-            }
-            continue;
-        }
-        return { path, config: await loadConfigObject(path) };
-    }
-    return null;
-}
-function loadEnvOverrides() {
-    const enabled = parseBoolean(process.env.DCP_ENABLED);
-    const debug = parseBoolean(process.env.DCP_DEBUG);
-    const keepRecentCount = parseNumber(process.env.DCP_KEEP_RECENT_COUNT);
-    const rules = typeof process.env.DCP_RULES === "string"
-        ? process.env.DCP_RULES
-            .split(",")
-            .map((value) => value.trim())
-            .filter(Boolean)
-        : undefined;
-    return {
-        ...(enabled !== undefined ? { enabled } : {}),
-        ...(debug !== undefined ? { debug } : {}),
-        ...(keepRecentCount !== undefined ? { keepRecentCount } : {}),
-        ...(rules !== undefined ? { rules } : {}),
-    };
-}
-function normalizeBaseConfig(value) {
-    if (!isPlainObject(value)) {
-        return { ...DEFAULT_CONFIG };
-    }
-    const merged = {
-        ...DEFAULT_CONFIG,
-        ...value,
-    };
-    if (!Array.isArray(merged.rules)) {
-        merged.rules = [...DEFAULT_CONFIG.rules];
-    }
-    if (typeof merged.enabled !== "boolean") {
-        merged.enabled = DEFAULT_CONFIG.enabled;
-    }
-    if (typeof merged.debug !== "boolean") {
-        merged.debug = DEFAULT_CONFIG.debug;
-    }
-    if (!Number.isInteger(merged.keepRecentCount) || merged.keepRecentCount < 0) {
-        merged.keepRecentCount = DEFAULT_CONFIG.keepRecentCount;
-    }
-    return merged;
-}
+const require = createRequire(import.meta.url);
 /**
  * Load configuration from extension settings, files, or defaults
  * Priority (highest to lowest):
@@ -207,23 +69,38 @@ function normalizeBaseConfig(value) {
  * 2. Environment variables (DCP_ENABLED, DCP_DEBUG, DCP_KEEP_RECENT_COUNT, DCP_RULES)
  * 3. Config file in current directory (dcp.config.ts, etc.)
  * 4. Config file in home directory (~/.dcprc)
- * 5. Default configuration
+ * 5. package.json key ("pi-dcp" or "dcp") in cwd/home
+ * 6. Default configuration
  */
 export async function loadConfig(pi) {
-    let discoveredConfig = null;
+    let loadedConfig = {};
+    let source = undefined;
+    let attemptedSource = undefined;
     try {
-        discoveredConfig = await findConfigFile(process.cwd());
+        const discovered = await discoverConfigSource();
+        if (discovered) {
+            attemptedSource = discovered.path;
+            loadedConfig = await loadConfigSource(discovered);
+            source = discovered.path;
+        }
     }
     catch (error) {
-        console.warn(`[pi-dcp] Warning: ${error instanceof Error ? error.message : String(error)}. Falling back to defaults.`);
+        console.warn(`[pi-dcp] Failed to load configuration${attemptedSource ? ` from ${attemptedSource}` : ""}: ${error?.message || error}. Falling back to defaults.`);
     }
-    const config = normalizeBaseConfig({
-        ...(discoveredConfig?.config ?? {}),
-        ...loadEnvOverrides(),
+    const config = normalizeConfig({
+        ...DEFAULT_CONFIG,
+        ...loadedConfig,
     });
+    applyEnvironmentOverrides(config);
     // Apply flag overrides (highest priority)
     const enabled = pi.getFlag("--dcp-enabled");
     const debug = pi.getFlag("--dcp-debug");
+    if (enabled !== undefined) {
+        config.enabled = enabled;
+    }
+    if (debug !== undefined) {
+        config.debug = debug;
+    }
     // Filter out invalid rules
     const availableRuleNames = getRuleNames();
     const invalidRuleNames = [];
@@ -244,29 +121,362 @@ export async function loadConfig(pi) {
         }
         return rule;
     });
-    if (enabled !== undefined) {
-        config.enabled = enabled;
-    }
-    if (debug !== undefined) {
-        config.debug = debug;
-    }
-    // Log config discovery and invalid rules if debug is enabled
-    if (config.debug && discoveredConfig?.path) {
-        console.warn(`[pi-dcp] Loaded config from ${discoveredConfig.path}`);
-    }
-    if (config.debug && invalidRuleNames.length > 0) {
-        console.warn(`[pi-dcp] Warning: The following configured rules are invalid and will be ignored: ${invalidRuleNames.join(", ")}`);
+    // Log invalid rules if debug is enabled
+    if (config.debug) {
+        if (source) {
+            console.info(`[pi-dcp] Loaded config from ${source}`);
+        }
+        if (invalidRuleNames.length > 0) {
+            console.warn(`[pi-dcp] Warning: The following configured rules are invalid and will be ignored: ${invalidRuleNames.join(", ")}`);
+        }
     }
     return {
         ...config,
         rules,
     };
 }
+async function discoverConfigSource() {
+    const searchDirs = [process.cwd(), homedir()];
+    for (const dir of searchDirs) {
+        for (const fileName of CONFIG_FILE_NAMES) {
+            const filePath = resolve(dir, fileName);
+            if (await pathExists(filePath)) {
+                return { kind: "file", path: filePath };
+            }
+        }
+        const packageJsonPath = resolve(dir, "package.json");
+        if (await pathExists(packageJsonPath)) {
+            const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8"));
+            const packageConfig = packageJson["pi-dcp"] ?? packageJson.dcp;
+            if (packageConfig && typeof packageConfig === "object") {
+                return {
+                    kind: "package-json",
+                    path: `${packageJsonPath}#${packageJson["pi-dcp"] ? "pi-dcp" : "dcp"}`,
+                    value: packageConfig,
+                };
+            }
+        }
+    }
+    return null;
+}
+async function loadConfigSource(source) {
+    if (source.kind === "package-json") {
+        return source.value;
+    }
+    const filePath = source.path;
+    const extension = extname(filePath).toLowerCase();
+    if (extension === ".toml") {
+        return parseToml(await readFile(filePath, "utf8"));
+    }
+    if (extension === ".yaml" || extension === ".yml") {
+        return parseYaml(await readFile(filePath, "utf8"));
+    }
+    if (extension === ".cjs") {
+        return normalizeModuleValue(require(filePath));
+    }
+    if (extension === ".ts" || extension === ".mts" || extension === ".cts") {
+        return loadTypeScriptConfig(filePath);
+    }
+    if (extension === ".json") {
+        return JSON.parse(await readFile(filePath, "utf8"));
+    }
+    if (filePath.endsWith(".dcprc")) {
+        const sourceText = await readFile(filePath, "utf8");
+        const trimmed = sourceText.trim();
+        if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+            return JSON.parse(sourceText);
+        }
+        if (/\bmodule\.exports\s*=/.test(sourceText) || /\bexports\./.test(sourceText)) {
+            return normalizeModuleValue(require(filePath));
+        }
+        if (looksLikeTypeScriptModule(sourceText)) {
+            return loadTypeScriptConfig(filePath);
+        }
+        return loadJavaScriptConfig(filePath);
+    }
+    return loadJavaScriptConfig(filePath);
+}
+async function loadJavaScriptConfig(filePath) {
+    const href = `${pathToFileURL(filePath).href}?t=${Date.now()}`;
+    const moduleValue = await import(href);
+    return normalizeModuleValue(moduleValue);
+}
+async function loadTypeScriptConfig(filePath) {
+    const source = await readFile(filePath, "utf8");
+    const compiled = transpileConfigTypeScript(source);
+    const tempPath = resolve(dirname(filePath), `.pi-dcp-config-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.mjs`);
+    await writeFile(tempPath, compiled, "utf8");
+    try {
+        return await loadJavaScriptConfig(tempPath);
+    }
+    finally {
+        await unlink(tempPath).catch(() => undefined);
+    }
+}
+function normalizeModuleValue(moduleValue) {
+    if (moduleValue && typeof moduleValue === "object" && "default" in moduleValue) {
+        return moduleValue.default ?? {};
+    }
+    return moduleValue ?? {};
+}
+function normalizeConfig(config) {
+    const configObject = config && typeof config === "object" ? config : {};
+    const normalized = {
+        ...DEFAULT_CONFIG,
+        ...configObject,
+        protectedTools: Array.isArray(configObject.protectedTools)
+            ? configObject.protectedTools.filter((tool) => typeof tool === "string" && tool.length > 0)
+            : [...DEFAULT_CONFIG.protectedTools],
+        protectedFilePatterns: Array.isArray(configObject.protectedFilePatterns)
+            ? configObject.protectedFilePatterns.filter((pattern) => typeof pattern === "string" && pattern.length > 0)
+            : [...DEFAULT_CONFIG.protectedFilePatterns],
+        ageGates: {
+            ...DEFAULT_CONFIG.ageGates,
+            ...(configObject.ageGates && typeof configObject.ageGates === "object" ? configObject.ageGates : {}),
+        },
+        redaction: {
+            ...DEFAULT_CONFIG.redaction,
+            ...(configObject.redaction && typeof configObject.redaction === "object" ? configObject.redaction : {}),
+        },
+        nudge: {
+            ...DEFAULT_CONFIG.nudge,
+            ...(configObject.nudge && typeof configObject.nudge === "object" ? configObject.nudge : {}),
+        },
+    };
+    if (!Array.isArray(normalized.rules)) {
+        normalized.rules = [...DEFAULT_CONFIG.rules];
+    }
+    if (typeof normalized.enabled !== "boolean") {
+        normalized.enabled = DEFAULT_CONFIG.enabled;
+    }
+    if (typeof normalized.debug !== "boolean") {
+        normalized.debug = DEFAULT_CONFIG.debug;
+    }
+    if (!Number.isFinite(normalized.keepRecentCount) || normalized.keepRecentCount < 0) {
+        normalized.keepRecentCount = DEFAULT_CONFIG.keepRecentCount;
+    }
+    for (const key of Object.keys(DEFAULT_CONFIG.ageGates)) {
+        const value = normalized.ageGates[key];
+        if (!Number.isFinite(value) || value < 0) {
+            normalized.ageGates[key] = DEFAULT_CONFIG.ageGates[key];
+        }
+    }
+    for (const key of Object.keys(DEFAULT_CONFIG.redaction)) {
+        if (typeof normalized.redaction[key] !== "boolean") {
+            normalized.redaction[key] = DEFAULT_CONFIG.redaction[key];
+        }
+    }
+    if (!normalized.nudge || typeof normalized.nudge !== "object") {
+        normalized.nudge = { ...DEFAULT_CONFIG.nudge };
+    }
+    return normalized;
+}
+function applyEnvironmentOverrides(config) {
+    const enabled = parseBoolean(process.env.DCP_ENABLED);
+    const debug = parseBoolean(process.env.DCP_DEBUG);
+    const keepRecentCount = parseNumber(process.env.DCP_KEEP_RECENT_COUNT);
+    const rules = parseRules(process.env.DCP_RULES);
+    if (enabled !== undefined) {
+        config.enabled = enabled;
+    }
+    if (debug !== undefined) {
+        config.debug = debug;
+    }
+    if (keepRecentCount !== undefined) {
+        config.keepRecentCount = keepRecentCount;
+    }
+    if (rules !== undefined) {
+        config.rules = rules;
+    }
+}
+function parseBoolean(value) {
+    if (value == null) {
+        return undefined;
+    }
+    const normalized = value.trim().toLowerCase();
+    if (["1", "true", "yes", "on"].includes(normalized)) {
+        return true;
+    }
+    if (["0", "false", "no", "off"].includes(normalized)) {
+        return false;
+    }
+    return undefined;
+}
+function parseNumber(value) {
+    if (value == null || value.trim() === "") {
+        return undefined;
+    }
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+}
+function parseRules(value) {
+    if (value == null || value.trim() === "") {
+        return undefined;
+    }
+    const trimmed = value.trim();
+    if (trimmed.startsWith("[")) {
+        try {
+            const parsed = JSON.parse(trimmed);
+            return Array.isArray(parsed) ? parsed : undefined;
+        }
+        catch {
+            return undefined;
+        }
+    }
+    return trimmed
+        .split(",")
+        .map((part) => part.trim())
+        .filter(Boolean);
+}
+async function pathExists(path) {
+    try {
+        await access(path);
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+function looksLikeTypeScriptModule(source) {
+    return /\bimport\s+type\b/.test(source)
+        || /\bsatisfies\s+[A-Za-z_$]/.test(source)
+        || /\bexport\s+default\b/.test(source);
+}
+function transpileConfigTypeScript(source) {
+    return source
+        .replace(/^\s*import\s+type\s+[^;]+;\s*$/gm, "")
+        .replace(/^\s*export\s+type\s+[^;]+;\s*$/gm, "")
+        .replace(/\s+satisfies\s+[A-Za-z_$][A-Za-z0-9_$\.<>\[\]\{\},\s|&]*/g, "")
+        .replace(/\s+as\s+const\b/g, "");
+}
+function parseToml(source) {
+    const result = {};
+    for (const rawLine of source.split(/\r?\n/)) {
+        const line = rawLine.replace(/#.*$/, "").trim();
+        if (!line || line.startsWith("[")) {
+            continue;
+        }
+        const separatorIndex = line.indexOf("=");
+        if (separatorIndex === -1) {
+            continue;
+        }
+        const key = line.slice(0, separatorIndex).trim();
+        const value = line.slice(separatorIndex + 1).trim();
+        result[key] = parseScalar(value);
+    }
+    return result;
+}
+function parseYaml(source) {
+    const result = {};
+    let activeArrayKey = null;
+    for (const rawLine of source.split(/\r?\n/)) {
+        const lineWithoutComment = stripYamlComment(rawLine);
+        const trimmed = lineWithoutComment.trim();
+        if (!trimmed) {
+            continue;
+        }
+        const arrayMatch = rawLine.match(/^\s*-\s*(.+)$/);
+        if (arrayMatch && activeArrayKey) {
+            result[activeArrayKey].push(parseScalar(arrayMatch[1].trim()));
+            continue;
+        }
+        const keyMatch = lineWithoutComment.match(/^\s*([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
+        if (!keyMatch) {
+            activeArrayKey = null;
+            continue;
+        }
+        const [, key, rawValue] = keyMatch;
+        const value = rawValue.trim();
+        if (value === "") {
+            result[key] = [];
+            activeArrayKey = key;
+            continue;
+        }
+        result[key] = parseScalar(value);
+        activeArrayKey = null;
+    }
+    return result;
+}
+function stripYamlComment(line) {
+    let inSingle = false;
+    let inDouble = false;
+    let result = "";
+    for (let i = 0; i < line.length; i += 1) {
+        const char = line[i];
+        if (char === "'" && !inDouble) {
+            inSingle = !inSingle;
+        }
+        else if (char === '"' && !inSingle) {
+            inDouble = !inDouble;
+        }
+        if (char === "#" && !inSingle && !inDouble) {
+            break;
+        }
+        result += char;
+    }
+    return result;
+}
+function parseScalar(value) {
+    const trimmed = value.trim();
+    if (trimmed === "true") {
+        return true;
+    }
+    if (trimmed === "false") {
+        return false;
+    }
+    if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+        return trimmed.slice(1, -1);
+    }
+    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+        const inner = trimmed.slice(1, -1).trim();
+        if (!inner) {
+            return [];
+        }
+        return splitInlineArray(inner).map((part) => parseScalar(part));
+    }
+    const numeric = Number(trimmed);
+    if (Number.isFinite(numeric) && trimmed !== "") {
+        return numeric;
+    }
+    return trimmed;
+}
+function splitInlineArray(value) {
+    const parts = [];
+    let current = "";
+    let inSingle = false;
+    let inDouble = false;
+    for (let i = 0; i < value.length; i += 1) {
+        const char = value[i];
+        if (char === "'" && !inDouble) {
+            inSingle = !inSingle;
+        }
+        else if (char === '"' && !inSingle) {
+            inDouble = !inDouble;
+        }
+        if (char === "," && !inSingle && !inDouble) {
+            parts.push(current.trim());
+            current = "";
+            continue;
+        }
+        current += char;
+    }
+    if (current.trim()) {
+        parts.push(current.trim());
+    }
+    return parts;
+}
 /**
  * Get default configuration (useful for testing or displaying defaults)
  */
 export function getDefaultConfig() {
-    return { ...DEFAULT_CONFIG };
+    return {
+        ...DEFAULT_CONFIG,
+        protectedTools: [...DEFAULT_CONFIG.protectedTools],
+        protectedFilePatterns: [...DEFAULT_CONFIG.protectedFilePatterns],
+        ageGates: { ...DEFAULT_CONFIG.ageGates },
+        redaction: { ...DEFAULT_CONFIG.redaction },
+        nudge: { ...DEFAULT_CONFIG.nudge },
+    };
 }
 /**
  * Generate sample configuration file content
@@ -288,8 +498,22 @@ import type { DcpConfig } from "~/.pi/agent/extensions/pi-dcp/src/types";
 export default {
 	enabled: true,
 	debug: false,
-	rules: ["deduplication", "superseded-writes", "error-purging", "tool-pairing", "recency"],
+	rules: ["deduplication", "superseded-writes", "error-purging", "superseded-tool-results", "tool-pairing", "recency"],
 	keepRecentCount: 10,
+	protectedTools: [],
+	protectedFilePatterns: [],
+	ageGates: {
+		supersededToolResults: 0,
+		errorPurging: 0,
+		supersededWrites: 0,
+	},
+	redaction: {
+		supersededToolResults: false,
+		resolvedErrors: false,
+	},
+	nudge: {
+		enabled: true,
+	},
 } satisfies DcpConfig;
 `;
     }
@@ -319,18 +543,51 @@ export default {
 	// - "deduplication": Remove duplicate tool outputs
 	// - "superseded-writes": Remove older file versions
 	// - "error-purging": Remove resolved errors
+	// - "superseded-tool-results": Remove older repeated read/bash results
 	// - "tool-pairing": Preserve tool_use/tool_result pairing (CRITICAL)
 	// - "recency": Always keep recent messages
 	rules: [
 		"deduplication",
 		"superseded-writes",
 		"error-purging",
+		"superseded-tool-results",
 		"tool-pairing",
 		"recency",
 	],
 
 	// Number of recent messages to always keep (for recency rule)
 	keepRecentCount: 10,
+
+	// Tool names that normal cleanup rules must never prune or redact
+	protectedTools: [],
+
+	// File paths/globs that normal cleanup rules must never prune or redact
+	protectedFilePatterns: [],
+
+	// Minimum completed later user turns required before destructive cleanup runs.
+	// A later user turn counts only after some later non-user reply/tool activity exists.
+	ageGates: {
+		supersededToolResults: 0,
+		errorPurging: 0,
+		supersededWrites: 0,
+	},
+
+	// Redaction toggles are available for newer workflow stages.
+	// Defaults remain delete-only for backwards compatibility.
+	redaction: {
+		supersededToolResults: false,
+		resolvedErrors: false,
+	},
+
+	// Long-session nudging configuration
+	nudge: {
+		enabled: true,
+		minMessages: 60,
+		minToolResults: 30,
+		minRepeatCount: 3,
+		minContextPercent: 70,
+		notify: true,
+	},
 } satisfies DcpConfig;
 `;
 }
@@ -359,3 +616,4 @@ export async function writeConfigFile(path, options) {
     const content = generateConfigFileContent(options);
     await writeFile(path, content, "utf-8");
 }
+//# sourceMappingURL=config.js.map
