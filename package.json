@@ -34,7 +34,6 @@
     ]
   },
   "dependencies": {
-    "bunfig": "^0.15.6",
     "@mariozechner/pi-coding-agent": "file:../../pi-mono/packages/coding-agent",
     "@mariozechner/pi-agent-core": "file:../../pi-mono/packages/agent"
   }
