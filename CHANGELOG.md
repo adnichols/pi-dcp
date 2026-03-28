@@ -1,5 +1,43 @@
 # Changelog
 
+## Explicit context compaction tools - 2026-03-28
+
+### Added
+
+- model-callable `dcp_pressure` and `dcp_compact` tools for explicit pressure inspection and Pi-native compaction
+- shared context-pressure recommendation helper reused by tools and long-session nudges
+- lightweight explicit compaction state/guard handling for in-flight, stale, synchronous-failure, and rejected-promise cases
+
+### Changed
+
+- long-session nudges now point the agent at the explicit inspection → compaction workflow
+- explicit compaction recommendations ignore prior `dcp_pressure` / `dcp_compact` self-traffic
+
+### Technical Notes
+
+- verified against `thoughts/plans/explicit-context-compaction-tools.md`
+- documented actual minor divergence: the final guard uses in-flight plus stale-time recovery, but no post-completion message-count cooldown
+- architecture doc: `spec/architecture/explicit-context-compaction-tools.md`
+
+## Stale file read invalidation - 2026-03-28
+
+### Added
+
+- opt-in `stale-file-reads` rule for invalidating earlier successful `read` results after later successful `write` / `edit` to the same normalized path
+- dedicated config knobs: `ageGates.staleFileReads` and `redaction.staleFileReads`
+- stale-read redaction placeholders that preserve tool-result structure when enabled
+
+### Changed
+
+- shared path normalization now underpins both stale-read invalidation and path-based write/edit matching
+- docs/config comments now expose `stale-file-reads` as a guarded, explicit opt-in rule
+
+### Technical Notes
+
+- verified against `thoughts/plans/stale-file-read-invalidation.md`
+- default rollout remains guarded: registered, documented, and configurable, but not enabled in `DEFAULT_CONFIG.rules`
+- architecture doc: `spec/architecture/stale-file-read-invalidation.md`
+
 ## OpenCode-inspired pruning improvements - 2026-03-28
 
 ### Added

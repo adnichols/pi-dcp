@@ -1,5 +1,59 @@
 # ADR Log
 
+## ADR 0003: Add explicit agent-invoked compaction tools on top of automatic pruning
+**Status:** Accepted (implemented and verified)
+**Date:** 2026-03
+
+**Context:** `pi-dcp` could already prune automatically and inject long-session nudges, but it lacked a model-callable action surface for inspecting pressure or triggering real compaction.
+
+**Decision:**
+- add `dcp_pressure` for explicit inspection of current pressure and predicted ordinary `pi-dcp` savings
+- add `dcp_compact` for Pi-native compaction through `ctx.compact()`
+- centralize recommendation logic in `src/context-pressure.js` and exclude `dcp_pressure` / `dcp_compact` self-traffic from recommendation-oriented pressure analysis
+- keep compaction semantics asynchronous and guard repeated in-flight requests with lightweight in-memory state
+
+**Alternatives considered:**
+- OpenCode-style message/range compression tools
+- direct extension-managed history rewriting
+- passive nudges without an explicit tool workflow
+
+**Current state:**
+- `src/context-pressure.js`
+- `src/compaction.js`
+- `src/tools/dcp-pressure.js`
+- `src/tools/dcp-compact.js`
+- `src/events/beforeAgentStart.js`
+- `index.ts`
+
+---
+
+## ADR 0002: Add conservative stale-file-read invalidation as an opt-in rule
+**Status:** Accepted (implemented and verified)
+**Date:** 2026-03
+
+**Context:** repeated exact-signature pruning was already available for repeated `read` / `bash` operations, but `pi-dcp` still retained earlier file snapshots after later successful file mutation.
+
+**Decision:**
+- add a dedicated `stale-file-reads` rule rather than extending exact-signature dedupe
+- invalidate earlier successful `read` results only after later successful `write` / `edit` to the same normalized lexical path
+- keep rollout guarded by registering the rule but leaving it out of `DEFAULT_CONFIG.rules`
+- add dedicated config support for `ageGates.staleFileReads` and `redaction.staleFileReads`
+
+**Alternatives considered:**
+- overloading `superseded-tool-results`
+- shell-command path inference
+- dependency graph or transitive mutation invalidation
+- default-on rollout
+
+**Current state:**
+- `src/rules/stale-file-reads.js`
+- `src/metadata.js`
+- `src/config.js`
+- `src/workflow.js`
+- `index.ts`
+
+---
+
 ## ADR 0001: Adopt action-aware pruning instead of OpenCode-style compression
 **Status:** Accepted (implemented and verified)
 **Date:** 2026-03
