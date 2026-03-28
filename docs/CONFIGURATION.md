@@ -43,10 +43,12 @@ export interface DcpConfig {
     supersededToolResults?: number;
     errorPurging?: number;
     supersededWrites?: number;
+    staleFileReads?: number;
   };
   redaction?: {
     supersededToolResults?: boolean;
     resolvedErrors?: boolean;
+    staleFileReads?: boolean;
   };
   logDir?: string;
   nudge?: {
@@ -82,10 +84,12 @@ export default {
     supersededToolResults: 0,
     errorPurging: 0,
     supersededWrites: 0,
+    staleFileReads: 0,
   },
   redaction: {
     supersededToolResults: false,
     resolvedErrors: false,
+    staleFileReads: false,
   },
   nudge: {
     enabled: true,
@@ -139,6 +143,7 @@ ageGates: {
   supersededToolResults: 2,
   errorPurging: 1,
   supersededWrites: 3,
+  staleFileReads: 2,
 }
 ```
 
@@ -152,12 +157,14 @@ Enable in-place redaction instead of full deletion for supported cleanup paths.
 redaction: {
   supersededToolResults: true,
   resolvedErrors: true,
+  staleFileReads: true,
 }
 ```
 
 Current behavior:
 
 - `supersededToolResults: true` keeps older repeated `read`/`bash` tool results but replaces bulky payloads with compact placeholders
+- `staleFileReads: true` keeps stale pre-mutation `read` results but replaces them with compact placeholders
 - `resolvedErrors: true` keeps resolved error messages but strips bulky error payload text
 
 ### `nudge`
@@ -198,6 +205,7 @@ export default {
     supersededToolResults: 2,
     errorPurging: 1,
     supersededWrites: 3,
+    staleFileReads: 2,
   },
 } satisfies DcpConfig;
 ```
@@ -212,6 +220,7 @@ export default {
   redaction: {
     supersededToolResults: true,
     resolvedErrors: true,
+    staleFileReads: true,
   },
   nudge: {
     enabled: true,
@@ -241,6 +250,10 @@ export default {
 4. `superseded-tool-results`
 5. `tool-pairing`
 6. `recency`
+
+Additional opt-in built-in rule:
+
+7. `stale-file-reads` (recommended placement: after `superseded-tool-results` and before `tool-pairing`)
 
 Default ordering matters:
 
@@ -273,7 +286,7 @@ Check, in order:
 
 - whether the tool is in `protectedTools`
 - whether the file path matches `protectedFilePatterns`
-- whether the relevant `ageGates` threshold was met
+- whether the relevant `ageGates` threshold was met (`staleFileReads` for stale read invalidation)
 - whether `keepRecentCount` protected it
 - whether `tool-pairing` kept it for provider safety
 

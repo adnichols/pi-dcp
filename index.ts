@@ -38,6 +38,7 @@ import { deduplicationRule } from "./src/rules/deduplication.js";
 import { supersededWritesRule } from "./src/rules/superseded-writes.js";
 import { errorPurgingRule } from "./src/rules/error-purging.js";
 import { supersededToolResultsRule } from "./src/rules/superseded-tool-results.js";
+import { staleFileReadsRule } from "./src/rules/stale-file-reads.js";
 import { toolPairingRule } from "./src/rules/tool-pairing.js";
 import { recencyRule } from "./src/rules/recency.js";
 import type { DcpConfig, DcpConfigWithPruneRuleObjects } from "./src/types.js";
@@ -47,6 +48,7 @@ registerRule(deduplicationRule);
 registerRule(supersededWritesRule);
 registerRule(errorPurgingRule);
 registerRule(supersededToolResultsRule);
+registerRule(staleFileReadsRule);
 // Tool-pairing MUST run before recency to ensure pairs are intact
 registerRule(toolPairingRule);
 // Recency should be LAST to override other decisions

@@ -12,6 +12,7 @@ Pi-DCP now supports both **deletion** and **in-place redaction**:
 - removes superseded `write` / `edit` results
 - removes or redacts resolved errors
 - removes or redacts older repeated `read` / `bash` results
+- optionally removes or redacts stale `read` results after later successful `write` / `edit` operations to the same file
 - protects recent messages unless provider safety requires deletion
 - protects configured tools and file paths from destructive cleanup
 - delays destructive cleanup until enough later completed user turns have passed
@@ -61,10 +62,12 @@ export default {
     supersededToolResults: 0,
     errorPurging: 0,
     supersededWrites: 0,
+    staleFileReads: 0,
   },
   redaction: {
     supersededToolResults: false,
     resolvedErrors: false,
+    staleFileReads: false,
   },
   nudge: {
     enabled: true,
@@ -103,6 +106,10 @@ Default rule order is intentional:
 5. `tool-pairing`
 6. `recency`
 
+Opt-in rule available but disabled by default:
+
+- `stale-file-reads` (recommended placement: after `superseded-tool-results` and before `tool-pairing`)
+
 Why it matters:
 
 - cleanup rules decide what is obsolete
@@ -115,6 +122,7 @@ Repeated-operation cleanup uses shared normalized signatures:
 
 - `read` and `bash` use **exact normalized arguments**
 - `write` and `edit` use **shared path-based signatures**
+- opt-in `stale-file-reads` uses **normalized file path only**, intentionally ignoring `read` offsets/limits
 - protected tools/paths are excluded
 - different `read` slices or different `bash` timeouts no longer over-match
 
@@ -149,7 +157,7 @@ protectedFilePatterns: [
 
 - **Prune** removes the whole message
 - **Redact** keeps the message shell and tool identity, but replaces bulky payload text
-- redaction is currently used for older repeated tool results and resolved errors when enabled
+- redaction is currently used for older repeated tool results, stale file reads, and resolved errors when enabled
 
 ## Visibility
 

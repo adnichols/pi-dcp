@@ -5,6 +5,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { registerRule } from "../src/registry";
 import { errorPurgingRule } from "../src/rules/error-purging";
 import { recencyRule } from "../src/rules/recency";
+import { staleFileReadsRule } from "../src/rules/stale-file-reads";
 import { supersededToolResultsRule } from "../src/rules/superseded-tool-results";
 import { toolPairingRule } from "../src/rules/tool-pairing";
 import type { DcpConfigWithPruneRuleObjects } from "../src/types";
@@ -14,6 +15,7 @@ describe("Action-aware workflow redaction", () => {
 	beforeAll(() => {
 		registerRule(errorPurgingRule);
 		registerRule(supersededToolResultsRule);
+		registerRule(staleFileReadsRule);
 		registerRule(toolPairingRule);
 		registerRule(recencyRule);
 	});
@@ -54,10 +56,12 @@ describe("Action-aware workflow redaction", () => {
 			supersededToolResults: 0,
 			errorPurging: 0,
 			supersededWrites: 0,
+			staleFileReads: 0,
 		},
 		redaction: {
 			supersededToolResults: false,
 			resolvedErrors: false,
+			staleFileReads: false,
 		},
 		...overrides,
 	});
@@ -157,6 +161,69 @@ describe("Action-aware workflow redaction", () => {
 		expect(survivingResults).toHaveLength(2);
 		expect(getText(survivingResults[0] as AgentMessage)).toContain("very old read contents");
 		expect(getText(survivingResults[0] as AgentMessage)).not.toContain("redacted superseded tool result");
+	});
+
+	test("stale file reads can be redacted instead of removed", () => {
+		const messages: AgentMessage[] = [
+			{ role: "user", content: "Read then write the file" } as AgentMessage,
+			assistantToolCall("read_1", "read", { path: "README.md", offset: 10, limit: 20 }),
+			toolResult("read_1", "read", "very old read contents"),
+			assistantToolCall("write_1", "write", { path: "README.md", content: "fresh contents" }),
+			toolResult("write_1", "write", "write ok", {
+				details: { path: "README.md" },
+			}),
+		];
+
+		const result = applyPruningWorkflow(
+			messages,
+			config({
+				rules: [staleFileReadsRule, toolPairingRule, recencyRule],
+				redaction: {
+					supersededToolResults: false,
+					resolvedErrors: false,
+					staleFileReads: true,
+				},
+			}),
+		);
+
+		const redactedResult = result.find((message) => message.role === "toolResult" && (message as any).toolCallId === "read_1") as any;
+		expect(redactedResult).toBeTruthy();
+		expect(getText(redactedResult)).toContain("redacted stale file read");
+		expect(getText(redactedResult)).toContain("read");
+		expect(getText(redactedResult)).toContain("README.md");
+		expect(getText(redactedResult)).not.toContain("very old read contents");
+		expect(redactedResult.toolCallId).toBe("read_1");
+		expect(redactedResult.toolName).toBe("read");
+	});
+
+	test("recency clears stale-file-read redaction for recent messages", () => {
+		const messages: AgentMessage[] = [
+			{ role: "user", content: "Read then write the file" } as AgentMessage,
+			assistantToolCall("read_1", "read", { path: "README.md", offset: 10, limit: 20 }),
+			toolResult("read_1", "read", "very old read contents"),
+			assistantToolCall("write_1", "write", { path: "README.md", content: "fresh contents" }),
+			toolResult("write_1", "write", "write ok", {
+				details: { path: "README.md" },
+			}),
+		];
+
+		const result = applyPruningWorkflow(
+			messages,
+			config({
+				rules: [staleFileReadsRule, toolPairingRule, recencyRule],
+				keepRecentCount: 10,
+				redaction: {
+					supersededToolResults: false,
+					resolvedErrors: false,
+					staleFileReads: true,
+				},
+			}),
+		);
+
+		const staleRead = result.find((message) => message.role === "toolResult" && (message as any).toolCallId === "read_1") as AgentMessage;
+		expect(staleRead).toBeTruthy();
+		expect(getText(staleRead)).toContain("very old read contents");
+		expect(getText(staleRead)).not.toContain("redacted stale file read");
 	});
 
 	test("resolved errors can be redacted while keeping a short error summary", () => {

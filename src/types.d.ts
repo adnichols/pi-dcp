@@ -111,11 +111,13 @@ export interface DcpConfig {
         supersededToolResults?: number;
         errorPurging?: number;
         supersededWrites?: number;
+        staleFileReads?: number;
     };
     /** Redaction feature toggles for action-aware workflow stages */
     redaction?: {
         supersededToolResults?: boolean;
         resolvedErrors?: boolean;
+        staleFileReads?: boolean;
     };
     /** Optional log directory override */
     logDir?: string;

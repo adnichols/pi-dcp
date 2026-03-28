@@ -10,6 +10,7 @@ import { registerRule } from "../src/registry";
 import { deduplicationRule } from "../src/rules/deduplication";
 import { errorPurgingRule } from "../src/rules/error-purging";
 import { recencyRule } from "../src/rules/recency";
+import { staleFileReadsRule } from "../src/rules/stale-file-reads";
 import { supersededWritesRule } from "../src/rules/superseded-writes";
 import { toolPairingRule } from "../src/rules/tool-pairing";
 import type { DcpConfigWithPruneRuleObjects } from "../src/types";
@@ -20,6 +21,7 @@ describe("Fix Verification: pi-mono tool history", () => {
 		registerRule(deduplicationRule);
 		registerRule(supersededWritesRule);
 		registerRule(errorPurgingRule);
+		registerRule(staleFileReadsRule);
 		registerRule(toolPairingRule);
 		registerRule(recencyRule);
 	});
@@ -225,5 +227,34 @@ describe("Fix Verification: pi-mono tool history", () => {
 		const result = applyPruningWorkflow(messages, productionConfig);
 		expectNoOrphanedToolResults(result);
 		expect(result.some((message) => message.role === "toolResult")).toBe(true);
+	});
+
+	test("stale-file-read redaction preserves pairing invariants", () => {
+		const config: DcpConfigWithPruneRuleObjects = {
+			enabled: true,
+			debug: false,
+			rules: [staleFileReadsRule, toolPairingRule, recencyRule],
+			keepRecentCount: 0,
+			redaction: {
+				staleFileReads: true,
+			},
+		};
+
+		const messages: AgentMessage[] = [
+			{ role: "user", content: "Read then write" } as AgentMessage,
+			assistantToolCall("call_read_1", "read", { path: "README.md", offset: 10, limit: 20 }),
+			toolResult("call_read_1", "read", "before write"),
+			assistantToolCall("call_write_1", "write", { path: "README.md", content: "after" }),
+			toolResult("call_write_1", "write", "write ok", {
+				details: { path: "README.md" },
+			}),
+		];
+
+		const result = applyPruningWorkflow(messages, config);
+		const staleRead = result.find((message) => message.role === "toolResult" && (message as any).toolCallId === "call_read_1") as AgentMessage;
+
+		expect(staleRead).toBeTruthy();
+		expectNoOrphanedToolResults(result);
+		expect(Array.isArray(staleRead.content) ? (staleRead.content as any[]).some((part) => part?.text?.includes("redacted stale file read")) : false).toBe(true);
 	});
 });

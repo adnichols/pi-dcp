@@ -4,6 +4,7 @@ import { beforeAll, describe, expect, test } from "bun:test";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { registerRule } from "../src/registry";
 import { recencyRule } from "../src/rules/recency";
+import { staleFileReadsRule } from "../src/rules/stale-file-reads";
 import { supersededToolResultsRule } from "../src/rules/superseded-tool-results";
 import { toolPairingRule } from "../src/rules/tool-pairing";
 import type { DcpConfigWithPruneRuleObjects } from "../src/types";
@@ -12,6 +13,7 @@ import { applyPruningWorkflow } from "../src/workflow";
 describe("Repeated-operation exact signatures", () => {
 	beforeAll(() => {
 		registerRule(supersededToolResultsRule);
+		registerRule(staleFileReadsRule);
 		registerRule(toolPairingRule);
 		registerRule(recencyRule);
 	});
@@ -52,10 +54,12 @@ describe("Repeated-operation exact signatures", () => {
 			supersededToolResults: 0,
 			errorPurging: 0,
 			supersededWrites: 0,
+			staleFileReads: 0,
 		},
 		redaction: {
 			supersededToolResults: false,
 			resolvedErrors: false,
+			staleFileReads: false,
 		},
 		...overrides,
 	});
@@ -184,5 +188,30 @@ describe("Repeated-operation exact signatures", () => {
 			}),
 		);
 		expect(protectedResult.filter((message) => message.role === "toolResult")).toHaveLength(2);
+	});
+
+	test("stale pre-write reads are removed while later duplicate rereads still collapse by exact signature", () => {
+		const messages: AgentMessage[] = [
+			{ role: "user", content: "Read, mutate, and reread" } as AgentMessage,
+			assistantToolCall("read_1", "read", { path: "README.md", offset: 10, limit: 5 }),
+			toolResult("read_1", "read", "before write"),
+			assistantToolCall("write_1", "write", { path: "README.md", content: "updated" }),
+			toolResult("write_1", "write", "write ok", {
+				details: { path: "README.md" },
+			}),
+			assistantToolCall("read_2", "read", { offset: 0, path: "README.md", limit: 5 }),
+			toolResult("read_2", "read", "after write first read"),
+			assistantToolCall("read_3", "read", { limit: 5, path: "README.md", offset: 0 }),
+			toolResult("read_3", "read", "after write second read"),
+		];
+
+		const result = applyPruningWorkflow(messages, {
+			...config(),
+			rules: [supersededToolResultsRule, staleFileReadsRule, toolPairingRule, recencyRule],
+		});
+
+		const survivingResults = result.filter((message) => message.role === "toolResult");
+		expect(survivingResults).toHaveLength(2);
+		expect(survivingResults.map((message) => (message as any).toolCallId)).toEqual(["write_1", "read_3"]);
 	});
 });

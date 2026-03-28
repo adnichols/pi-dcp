@@ -62,7 +62,9 @@ function buildRedactionText(entry, withMetadata, index) {
     const command = extractCommand(message, withMetadata, index);
     const label = metadata.redactionKind === "resolved-error"
         ? "redacted resolved error"
-        : "redacted superseded tool result";
+        : metadata.redactionKind === "stale-file-read"
+            ? "redacted stale file read"
+            : "redacted superseded tool result";
     const descriptor = [toolName, filePath, command].filter((value) => typeof value === "string" && value.length > 0);
     const heading = descriptor.length > 0
         ? `[pi-dcp ${label}: ${descriptor.join(" · ")}]`

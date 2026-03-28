@@ -1,6 +1,7 @@
 /**
  * Message metadata utilities
  */
+import { posix as pathPosix } from "node:path";
 
 /**
  * Wrap an AgentMessage with metadata container
@@ -59,11 +60,17 @@ function serializeToolResultContent(message) {
         .join("");
 }
 
-function normalizePathLike(value) {
+export function normalizeFilePath(value) {
     if (typeof value !== "string")
         return null;
-    const normalized = value.replace(/\\/g, "/");
-    return normalized.length > 0 ? normalized : null;
+    const normalized = value.trim().replace(/\\/g, "/");
+    if (normalized.length === 0)
+        return null;
+    const collapsed = pathPosix.normalize(normalized);
+    return collapsed.length > 0 ? collapsed : null;
+}
+function normalizePathLike(value) {
+    return normalizeFilePath(value);
 }
 
 function escapeRegExp(value) {

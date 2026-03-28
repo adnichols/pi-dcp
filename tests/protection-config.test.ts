@@ -5,6 +5,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { registerRule } from "../src/registry";
 import { errorPurgingRule } from "../src/rules/error-purging";
 import { recencyRule } from "../src/rules/recency";
+import { staleFileReadsRule } from "../src/rules/stale-file-reads";
 import { supersededToolResultsRule } from "../src/rules/superseded-tool-results";
 import { supersededWritesRule } from "../src/rules/superseded-writes";
 import { toolPairingRule } from "../src/rules/tool-pairing";
@@ -16,6 +17,7 @@ describe("Config-driven pruning protections", () => {
 		registerRule(supersededWritesRule);
 		registerRule(errorPurgingRule);
 		registerRule(supersededToolResultsRule);
+		registerRule(staleFileReadsRule);
 		registerRule(toolPairingRule);
 		registerRule(recencyRule);
 	});
@@ -59,10 +61,12 @@ describe("Config-driven pruning protections", () => {
 			supersededToolResults: 0,
 			errorPurging: 0,
 			supersededWrites: 0,
+			staleFileReads: 0,
 		},
 		redaction: {
 			supersededToolResults: false,
 			resolvedErrors: false,
+			staleFileReads: false,
 		},
 		...overrides,
 	});
@@ -149,5 +153,114 @@ describe("Config-driven pruning protections", () => {
 		);
 		expect(afterThreshold.filter((message) => message.role === "toolResult")).toHaveLength(1);
 		expect((afterThreshold.find((message) => message.role === "toolResult") as any)?.toolCallId).toBe("read_2");
+	});
+
+	test("recency keeps stale reads when they are still within keepRecentCount", () => {
+		const config = baseConfig([staleFileReadsRule, toolPairingRule, recencyRule], {
+			keepRecentCount: 10,
+		});
+		const messages: AgentMessage[] = [
+			{ role: "user", content: "Read then edit the file" } as AgentMessage,
+			assistantToolCall("read_1", "read", { path: "src/lib/example.ts", offset: 0, limit: 20 }),
+			toolResult("read_1", "read", "old read"),
+			assistantToolCall("edit_1", "edit", { path: "src/lib/example.ts", oldText: "A", newText: "B" }),
+			toolResult("edit_1", "edit", "edit ok", {
+				details: { path: "src/lib/example.ts" },
+			}),
+		];
+
+		const result = applyPruningWorkflow(messages, config);
+		const survivingResults = result.filter((message) => message.role === "toolResult");
+
+		expect(survivingResults).toHaveLength(2);
+		expect(survivingResults.map((message) => (message as any).toolCallId)).toEqual(["read_1", "edit_1"]);
+	});
+
+	test("protected read tools prevent stale-file-read invalidation", () => {
+		const config = baseConfig([staleFileReadsRule, toolPairingRule], {
+			protectedTools: ["read"],
+		});
+		const messages: AgentMessage[] = [
+			{ role: "user", content: "Read then write the file" } as AgentMessage,
+			assistantToolCall("read_1", "read", { path: "README.md" }),
+			toolResult("read_1", "read", "old read"),
+			assistantToolCall("write_1", "write", { path: "README.md", content: "new contents" }),
+			toolResult("write_1", "write", "write ok", {
+				details: { path: "README.md" },
+			}),
+		];
+
+		const result = applyPruningWorkflow(messages, config);
+		const survivingResults = result.filter((message) => message.role === "toolResult");
+
+		expect(survivingResults).toHaveLength(2);
+		expect(survivingResults.map((message) => (message as any).toolCallId)).toEqual(["read_1", "write_1"]);
+	});
+
+	test("protected file patterns prevent stale-file-read invalidation", () => {
+		const config = baseConfig([staleFileReadsRule, toolPairingRule], {
+			protectedFilePatterns: ["src/**/*.ts"],
+		});
+		const messages: AgentMessage[] = [
+			{ role: "user", content: "Read then edit the protected file" } as AgentMessage,
+			assistantToolCall("read_1", "read", { path: "src/lib/example.ts" }),
+			toolResult("read_1", "read", "old read"),
+			assistantToolCall("edit_1", "edit", { path: "src/lib/example.ts", oldText: "A", newText: "B" }),
+			toolResult("edit_1", "edit", "edit ok", {
+				details: { path: "src/lib/example.ts" },
+			}),
+		];
+
+		const result = applyPruningWorkflow(messages, config);
+		const survivingResults = result.filter((message) => message.role === "toolResult");
+
+		expect(survivingResults).toHaveLength(2);
+		expect(survivingResults.map((message) => (message as any).toolCallId)).toEqual(["read_1", "edit_1"]);
+	});
+
+	test("age gates delay stale-file-read invalidation until enough later user turns complete", () => {
+		const rules = [staleFileReadsRule, toolPairingRule, recencyRule];
+		const messages: AgentMessage[] = [
+			{ role: "user", content: "Read then write the file" } as AgentMessage,
+			assistantToolCall("read_1", "read", { path: "README.md", offset: 10, limit: 20 }),
+			toolResult("read_1", "read", "old read"),
+			assistantToolCall("write_1", "write", { path: "README.md", content: "new read" }),
+			toolResult("write_1", "write", "write ok", {
+				details: { path: "README.md" },
+			}),
+			{ role: "user", content: "Thanks, now inspect docs" } as AgentMessage,
+			{ role: "assistant", content: "Looking at docs." } as AgentMessage,
+		];
+
+		const beforeThreshold = applyPruningWorkflow(
+			messages,
+			baseConfig(rules, {
+				ageGates: {
+					supersededToolResults: 0,
+					errorPurging: 0,
+					supersededWrites: 0,
+					staleFileReads: 2,
+				},
+			}),
+		);
+		expect(beforeThreshold.filter((message) => message.role === "toolResult")).toHaveLength(2);
+
+		const afterThreshold = applyPruningWorkflow(
+			[
+				...messages,
+				{ role: "user", content: "One more follow-up" } as AgentMessage,
+				{ role: "assistant", content: "Done." } as AgentMessage,
+			],
+			baseConfig(rules, {
+				ageGates: {
+					supersededToolResults: 0,
+					errorPurging: 0,
+					supersededWrites: 0,
+					staleFileReads: 2,
+				},
+			}),
+		);
+		expect(afterThreshold.filter((message) => message.role === "toolResult")).toHaveLength(1);
+		expect((afterThreshold.find((message) => message.role === "toolResult") as any)?.toolCallId).toBe("write_1");
 	});
 });

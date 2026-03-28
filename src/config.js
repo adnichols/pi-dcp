@@ -29,10 +29,12 @@ const DEFAULT_CONFIG = {
         supersededToolResults: 0,
         errorPurging: 0,
         supersededWrites: 0,
+        staleFileReads: 0,
     },
     redaction: {
         supersededToolResults: false,
         resolvedErrors: false,
+        staleFileReads: false,
     },
     nudge: {
         enabled: true,
@@ -506,10 +508,12 @@ export default {
 		supersededToolResults: 0,
 		errorPurging: 0,
 		supersededWrites: 0,
+		staleFileReads: 0,
 	},
 	redaction: {
 		supersededToolResults: false,
 		resolvedErrors: false,
+		staleFileReads: false,
 	},
 	nudge: {
 		enabled: true,
@@ -544,6 +548,7 @@ export default {
 	// - "superseded-writes": Remove older file versions
 	// - "error-purging": Remove resolved errors
 	// - "superseded-tool-results": Remove older repeated read/bash results
+	// - "stale-file-reads": Remove reads invalidated by later successful writes/edits (opt-in)
 	// - "tool-pairing": Preserve tool_use/tool_result pairing (CRITICAL)
 	// - "recency": Always keep recent messages
 	rules: [
@@ -570,6 +575,7 @@ export default {
 		supersededToolResults: 0,
 		errorPurging: 0,
 		supersededWrites: 0,
+		staleFileReads: 0,
 	},
 
 	// Redaction toggles are available for newer workflow stages.
@@ -577,6 +583,7 @@ export default {
 	redaction: {
 		supersededToolResults: false,
 		resolvedErrors: false,
+		staleFileReads: false,
 	},
 
 	// Long-session nudging configuration
