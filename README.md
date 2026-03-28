@@ -42,14 +42,15 @@ git clone https://github.com/zenobi-us/pi-dcp.git ~/.pi/agent/extensions/pi-dcp
 
 When the extension is enabled, pi-dcp also registers two tools the agent can call directly:
 
-- `dcp_pressure` - inspect current context pressure, repeated inspection churn, and predicted ordinary pi-dcp savings
-- `dcp_compact` - trigger pi-native compaction with optional focus instructions
+- `dcp_pressure` - inspect current context pressure, predicted ordinary pi-dcp savings, and whether a new-user-turn branch shift makes older work summary-safe
+- `dcp_compact` - trigger pi-native compaction with optional focus instructions; branch-shift compaction automatically preserves the latest user request
 
 These tools are intentionally different from ordinary automatic pruning:
 
 - automatic pruning only removes/redacts context that pi-dcp can safely trim before the next provider call
 - explicit compaction asks pi itself to summarize and reload older context
 - `dcp_pressure` ignores prior `dcp_pressure` / `dcp_compact` traffic in its recommendation path so the tools do not inflate their own pressure signal
+- branch-shift steering in this pass is intentionally narrow: it only recognizes a substantial prior turn followed by a new user turn, not arbitrary intra-turn topic changes
 
 ## Configuration
 
@@ -182,9 +183,25 @@ Pi-DCP provides rough observability without a tokenizer dependency:
 - footer/status updates include prune/redaction counts and estimated token savings
 - `/dcp-stats` shows lifetime/session totals
 - `/dcp-context` shows the current role/token breakdown and tool-result payload pressure
-- long-session nudge text highlights repeated reads and repeated bash calls
+- long-session nudges now have two compaction-aware severities:
+  - **critical-context** — compact now before normal exploration continues
+  - **branch-shift** — compact before starting the next heavy branch because the prior turn looks closed
 
 All token numbers are estimates based on a lightweight chars-per-token heuristic.
+
+## Compaction steering
+
+Pi-DCP now separates two ideas clearly:
+
+- **prune/redact** - safe stale payload cleanup the extension can do automatically
+- **compaction** - Pi-native summarization of older raw history that is now likely summary-safe
+
+`dcp_pressure` can recommend:
+- `wait`
+- `compact-before-next-branch`
+- `compact-now`
+
+In this pass, `compact-before-next-branch` is intentionally conservative and only fires for **new-user-turn branch shifts**. It is backed by hard-coded heuristics, not user-configurable thresholds yet.
 
 ## Custom rules
 

@@ -100,7 +100,7 @@ Tell users about:
 - `/dcp-stats` - lifetime/session counts plus estimated tokens pruned/redacted
 - `/dcp-context` - live role/token breakdown for the current session
 - footer/status text - latest prune/redact counts and rough token savings
-- long-session nudge text - repeated reads/bash pressure summary
+- long-session nudges - now include compaction-aware branch-shift vs critical-context guidance when recommendation is not `wait`
 
 All token numbers are rough estimates from a lightweight chars/4 heuristic, not billing-accurate tokenizer output.
 
@@ -152,6 +152,24 @@ When advising on custom rules:
 - treat redaction as destructive for recency semantics
 - expect `tool-pairing` to win on provider safety
 
+## Explicit compaction tools
+
+Pi-DCP now also exposes:
+
+- `dcp_pressure` - inspect context pressure, predicted ordinary DCP savings, and whether the current session looks like a **new-user-turn branch shift** where older raw history can become summary-only
+- `dcp_compact` - trigger Pi-native compaction; in branch-shift mode it should preserve the latest user request automatically
+
+Current recommendation modes:
+- `wait`
+- `compact-before-next-branch`
+- `compact-now`
+
+Important scope note:
+- `compact-before-next-branch` is intentionally conservative in this pass
+- it only recognizes substantial prior turns followed by a **new user turn**
+- it does not try to detect arbitrary intra-turn topic shifts
+- its thresholds are currently hard-coded, not user-configurable
+
 ## Common recommendations
 
 ### When token usage is still too high
@@ -159,6 +177,8 @@ When advising on custom rules:
 - enable redaction for repeated tool results/errors
 - add age gates only where immediate cleanup is too aggressive
 - use `/dcp-stats` and `/dcp-context` to see where context cost lives
+- use `dcp_pressure` to distinguish safe stale-payload cleanup from compaction-worthy closed-workstream pressure
+- use `dcp_compact` when the recommendation is `compact-before-next-branch` or `compact-now`
 
 ### When Pi-DCP feels too aggressive
 - increase `keepRecentCount`

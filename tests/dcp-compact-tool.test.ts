@@ -65,6 +65,77 @@ describe("dcp_compact tool", () => {
 		expect((result.content as any[])[0].text).toContain("started asynchronously");
 	});
 
+	test("preserves the latest user request automatically for branch-shift compaction", async () => {
+		const state = createExplicitCompactionState();
+		const tool = createDcpCompactTool(config, state);
+		const compactCalls: any[] = [];
+		const messages: AgentMessage[] = [
+			{ role: "user", content: "Investigate deeply" } as AgentMessage,
+			assistantToolCall("read_1", "read", { path: "src/a.ts", offset: 0, limit: 20 }),
+			toolResult("read_1", "read", "A".repeat(900)),
+			assistantToolCall("read_2", "read", { path: "src/b.ts", offset: 0, limit: 20 }),
+			toolResult("read_2", "read", "B".repeat(900)),
+			assistantToolCall("bash_1", "bash", { command: "rg -n TODO src", timeout: 30 }),
+			toolResult("bash_1", "bash", "C".repeat(900)),
+			assistantToolCall("bash_2", "bash", { command: "rg -n FIXME src", timeout: 30 }),
+			toolResult("bash_2", "bash", "D".repeat(900)),
+			assistantToolCall("read_3", "read", { path: "src/c.ts", offset: 0, limit: 20 }),
+			toolResult("read_3", "read", "E".repeat(900)),
+			{ role: "assistant", content: "Investigation complete." } as AgentMessage,
+			{ role: "user", content: "Now implement the fix" } as AgentMessage,
+		];
+
+		const result = await tool.execute("call_compact_branch", {}, undefined, undefined, {
+			sessionManager: {
+				getBranch: () => messages.map((message) => ({ type: "message", message })),
+			},
+			getContextUsage: () => ({ percent: 72, tokens: 64000 }),
+			compact: (options: any) => compactCalls.push(options),
+		} as any);
+
+		expect(result.details.status).toBe("started");
+		expect(result.details.recommendation).toBe("compact-before-next-branch");
+		expect(compactCalls).toHaveLength(1);
+		expect(compactCalls[0].customInstructions).toContain("Preserve the current user request during compaction: Now implement the fix");
+	});
+
+	test("still compacts after a shallow probe during the branch-shift grace window", async () => {
+		const state = createExplicitCompactionState();
+		const tool = createDcpCompactTool(config, state);
+		let compactCalled = false;
+		const messages: AgentMessage[] = [
+			{ role: "user", content: "Investigate deeply" } as AgentMessage,
+			assistantToolCall("read_1", "read", { path: "src/a.ts", offset: 0, limit: 20 }),
+			toolResult("read_1", "read", "A".repeat(900)),
+			assistantToolCall("read_2", "read", { path: "src/b.ts", offset: 0, limit: 20 }),
+			toolResult("read_2", "read", "B".repeat(900)),
+			assistantToolCall("bash_1", "bash", { command: "rg -n TODO src", timeout: 30 }),
+			toolResult("bash_1", "bash", "C".repeat(900)),
+			assistantToolCall("bash_2", "bash", { command: "rg -n FIXME src", timeout: 30 }),
+			toolResult("bash_2", "bash", "D".repeat(900)),
+			assistantToolCall("read_3", "read", { path: "src/c.ts", offset: 0, limit: 20 }),
+			toolResult("read_3", "read", "E".repeat(900)),
+			{ role: "assistant", content: "Investigation complete." } as AgentMessage,
+			{ role: "user", content: "Now implement the fix" } as AgentMessage,
+			assistantToolCall("read_new_1", "read", { path: "src/new.ts", offset: 0, limit: 20 }),
+			toolResult("read_new_1", "read", "fresh read"),
+		];
+
+		const result = await tool.execute("call_compact_probe", {}, undefined, undefined, {
+			sessionManager: {
+				getBranch: () => messages.map((message) => ({ type: "message", message })),
+			},
+			getContextUsage: () => ({ percent: 72, tokens: 68000 }),
+			compact: () => {
+				compactCalled = true;
+			},
+		} as any);
+
+		expect(result.details.status).toBe("started");
+		expect(result.details.recommendation).toBe("compact-before-next-branch");
+		expect(compactCalled).toBe(true);
+	});
+
 	test("skips compaction when recommendation is negative and force is false", async () => {
 		const state = createExplicitCompactionState();
 		const tool = createDcpCompactTool(config, state);

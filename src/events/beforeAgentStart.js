@@ -5,6 +5,7 @@
  * session shows clear signs of repeated context churn.
  */
 import { getContextPressureSnapshot } from "../context-pressure.js";
+import { getRecommendationSentence, getRecommendationSeverity } from "../context-pressure-rendering.js";
 
 function getNudgeConfig(config) {
     const defaults = {
@@ -25,23 +26,16 @@ function getNudgeConfig(config) {
 function shouldNudge(snapshot, nudgeConfig) {
     if (!nudgeConfig.enabled)
         return false;
+    if (snapshot.recommendation !== "wait") {
+        return true;
+    }
     if (snapshot.analysis.totalMessages < nudgeConfig.minMessages)
         return false;
     const repeatedReadPressure = snapshot.analysis.repeatedReads.some((entry) => entry.count >= nudgeConfig.minRepeatCount);
     const repeatedBashPressure = snapshot.analysis.repeatedBashCommands.some((entry) => entry.count >= nudgeConfig.minRepeatCount);
     const toolPressure = snapshot.analysis.roleCounts.toolResult >= nudgeConfig.minToolResults;
     const contextPressure = typeof snapshot.usage?.percent === "number" && snapshot.usage.percent >= nudgeConfig.minContextPercent;
-    return repeatedReadPressure || repeatedBashPressure || toolPressure || contextPressure || snapshot.recommendation !== "wait";
-}
-
-function getRecommendationText(snapshot) {
-    if (snapshot.recommendation === "compact-now") {
-        return "Current recommendation: compact now.";
-    }
-    if (snapshot.recommendation === "clean-up-manually-first") {
-        return "Current recommendation: inspect with dcp_pressure and use dcp_compact if pressure still justifies compaction.";
-    }
-    return "Current recommendation: wait.";
+    return repeatedReadPressure || repeatedBashPressure || toolPressure || contextPressure;
 }
 
 function buildNudgeSystemPrompt(event, snapshot, nudgeConfig) {
@@ -56,15 +50,32 @@ function buildNudgeSystemPrompt(event, snapshot, nudgeConfig) {
         .slice(0, nudgeConfig.maxSummaryItems)
         .map((entry) => `${entry.shortCommand} x${entry.count}`)
         .join(", ");
+    const severity = getRecommendationSeverity(snapshot);
+    const severityGuidance = severity === "critical-context"
+        ? [
+            "Critical context pressure is active.",
+            "Compact now before normal exploration continues unless you are finishing a truly atomic step.",
+        ]
+        : severity === "branch-shift"
+            ? [
+                "A substantial prior turn looks closed and the next branch has just started.",
+                "Inspect with dcp_pressure if needed, then compact before starting another heavy branch.",
+            ]
+            : [
+                "Minimize context churn and inspect pressure before adding more exploratory context.",
+            ];
     const guidance = [
         "[pi-dcp long-session nudge]",
         contextLine,
         repeatedReads ? `Repeated reads already in history: ${repeatedReads}.` : undefined,
         repeatedCommands ? `Repeated bash commands already in history: ${repeatedCommands}.` : undefined,
         snapshot.predicted.estimatedTokensSaved > 0 ? `Predicted ordinary pi-dcp savings right now: ~${snapshot.predicted.estimatedTokensSaved} tokens.` : undefined,
-        getRecommendationText(snapshot),
+        getRecommendationSentence(snapshot.recommendation),
+        ...severityGuidance,
         "Actionable path: call dcp_pressure to inspect current pressure and call dcp_compact to trigger compaction when it is recommended.",
-        "Minimize context churn:",
+        "Context stance:",
+        "- Keep active work raw.",
+        "- Compact stale closed work when it is summary-safe.",
         "- Be terse and avoid restating unchanged plans or status.",
         "- Do not reread unchanged files or rerun identical commands unless something changed or you need a different slice.",
         "- Prefer targeted reads (offset/limit) and diff-oriented inspection over full-file rereads.",

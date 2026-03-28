@@ -171,12 +171,19 @@ Current behavior:
 
 Controls long-session prompt nudging and UI notifications.
 
-- `minMessages`: minimum conversation size before nudging
-- `minToolResults`: minimum tool-result count before nudging
-- `minRepeatCount`: repeated-operation count that qualifies as churn
-- `minContextPercent`: estimated context-window percentage threshold
+- `enabled`: master on/off switch for all nudges
+- `minMessages`: minimum conversation size before generic churn nudges
+- `minToolResults`: minimum tool-result count before generic churn nudges
+- `minRepeatCount`: repeated-operation count that qualifies as generic churn
+- `minContextPercent`: estimated context-window percentage threshold for generic churn nudges
 - `notify`: whether to emit UI notifications
 - `maxSummaryItems`: how many repeated reads/bash commands to include in the summary
+
+Important behavior:
+
+- **critical-context** and **branch-shift** compaction nudges are driven by the shared recommendation helper and do **not** use the older churn thresholds above
+- `nudge.enabled` still controls whether any nudge is injected at all
+- when shared recommendation is `wait`, generic churn nudges still use the thresholds above
 
 ## Example configs
 
@@ -246,10 +253,20 @@ export default {
 
 When `pi-dcp` is enabled, the extension also registers two tools for the agent:
 
-- `dcp_pressure` - inspect current context pressure, repeated inspection churn, and predicted ordinary pi-dcp savings
-- `dcp_compact` - trigger pi-native compaction with optional focus instructions
+- `dcp_pressure` - inspect current context pressure, predicted ordinary pi-dcp savings, and whether a substantial prior turn plus a new user turn makes older raw history summary-safe
+- `dcp_compact` - trigger pi-native compaction with optional focus instructions; branch-shift compaction automatically preserves the latest user request
 
 These tools are not controlled by a separate config block in the first pass. They reuse the existing pruning config and recommendation heuristics.
+
+Current recommendation modes:
+- `wait`
+- `compact-before-next-branch`
+- `compact-now`
+
+Branch-shift steering is intentionally narrow in this pass:
+- it only recognizes **new-user-turn branch shifts**
+- it does not try to detect arbitrary intra-turn topic changes
+- the branch-shift thresholds are currently **hard-coded**, not user-configurable
 
 Important distinction:
 
@@ -313,7 +330,13 @@ That usually means `tool-pairing` detected an orphaned or otherwise provider-uns
 
 Long-session nudges reflect overall pressure, not just immediately prunable content. A session can still be large because of many unique tool results even when ordinary prune/redact savings are small.
 
+Pi-DCP now separates:
+- **automatic prune/redact** for safely stale payloads
+- **explicit compaction** for older raw history that is now likely summary-safe
+
 In that case the intended path is:
 
 1. call `dcp_pressure` to inspect actual predicted savings and recommendation
 2. call `dcp_compact` if compaction is recommended
+
+If the recommendation is `compact-before-next-branch`, that means the prior turn looks closed and the current user request should be preserved while older history is summarized.

@@ -70,10 +70,45 @@ describe("dcp_pressure tool", () => {
 
 		const text = (result.content as any[]).map((part) => part.text).join("\n");
 		expect(text).toContain("compact now");
+		expect(text).toContain("urgent context-limit pressure");
 		expect(text).toContain("83%");
 		expect(result.details.recommendation).toBe("compact-now");
+		expect(result.details.opportunityKind).toBe("hard-pressure");
 		expect(result.details.analysis.originalMessageCount).toBe(5);
 		expect(result.details.predicted.prunedCount).toBe(1);
+	});
+
+	test("returns a closed-workstream recommendation for a substantial prior turn before a fresh branch", async () => {
+		const messages: AgentMessage[] = [
+			{ role: "user", content: "Investigate deeply" } as AgentMessage,
+			assistantToolCall("read_1", "read", { path: "src/a.ts", offset: 0, limit: 20 }),
+			toolResult("read_1", "read", "A".repeat(900)),
+			assistantToolCall("read_2", "read", { path: "src/b.ts", offset: 0, limit: 20 }),
+			toolResult("read_2", "read", "B".repeat(900)),
+			assistantToolCall("bash_1", "bash", { command: "rg -n TODO src", timeout: 30 }),
+			toolResult("bash_1", "bash", "C".repeat(900)),
+			assistantToolCall("bash_2", "bash", { command: "rg -n FIXME src", timeout: 30 }),
+			toolResult("bash_2", "bash", "D".repeat(900)),
+			assistantToolCall("read_3", "read", { path: "src/c.ts", offset: 0, limit: 20 }),
+			toolResult("read_3", "read", "E".repeat(900)),
+			{ role: "assistant", content: "Investigation complete." } as AgentMessage,
+			{ role: "user", content: "Now implement the fix" } as AgentMessage,
+		];
+		const tool = createDcpPressureTool(config);
+
+		const result = await tool.execute("call_pressure_branch", {}, undefined, undefined, {
+			sessionManager: {
+				getBranch: () => messages.map((message) => ({ type: "message", message })),
+			},
+			getContextUsage: () => ({ percent: 72, tokens: 64000 }),
+		} as any);
+
+		const text = (result.content as any[]).map((part) => part.text).join("\n");
+		expect(text).toContain("compact before next branch");
+		expect(text).toContain("closed-workstream compaction opportunity");
+		expect(result.details.recommendation).toBe("compact-before-next-branch");
+		expect(result.details.opportunityKind).toBe("closed-workstream");
+		expect(result.details.analysis.latestUserTextRaw).toBe("Now implement the fix");
 	});
 
 	test("ignores prior dcp tool traffic in its recommendation path", async () => {

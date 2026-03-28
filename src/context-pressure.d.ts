@@ -22,6 +22,19 @@ export interface ContextPressureSnapshot {
         assistantToolCalls: number;
         repeatedReads: Array<{ path: string; count: number; signature: string; label: string; shortPath: string; shortLabel: string }>;
         repeatedBashCommands: Array<{ command: string; count: number; signature: string; shortCommand: string }>;
+        latestUserIndex: number;
+        latestUserText: string;
+        latestUserTextRaw: string;
+        messagesSinceLatestUser: number;
+        nonUserMessagesSinceLatestUser: number;
+        successfulNonDcpToolResultsSinceLatestUser: number;
+        previousTurnMessageCount: number;
+        previousTurnToolResultCount: number;
+        previousTurnEstimatedTokens: number;
+        previousTurnUnresolvedErrorCount: number;
+        hasClosedWorkstreamBoundary: boolean;
+        continuationSuppressed: boolean;
+        boundaryWindowActive: boolean;
     };
     predicted: {
         prunedCount: number;
@@ -32,7 +45,8 @@ export interface ContextPressureSnapshot {
         pruneReasons: Record<string, number>;
         redactionReasons: Record<string, number>;
     };
-    recommendation: "compact-now" | "clean-up-manually-first" | "wait";
+    recommendation: "compact-before-next-branch" | "compact-now" | "wait";
+    opportunityKind: "none" | "closed-workstream" | "hard-pressure";
     rationale: string[];
     summary: string;
     filteredMessages: AgentMessage[];
@@ -43,8 +57,14 @@ export declare const DEFAULT_THRESHOLDS: {
     compactContextPercent: number;
     meaningfulSavingsTokens: number;
     repeatedOperationCount: number;
-    manualCleanupMessages: number;
-    manualCleanupToolResults: number;
+    previousTurnMessageCount: number;
+    previousTurnToolResultCount: number;
+    previousTurnEstimatedTokens: number;
+    totalMessages: number;
+    totalToolResults: number;
+    branchShiftContextPercent: number;
+    branchShiftGraceToolResults: number;
+    branchShiftGraceMessages: number;
 };
 
 export declare function getSessionMessages(entries: any[]): AgentMessage[];

@@ -3,6 +3,7 @@
  */
 import { beginExplicitCompaction, completeExplicitCompaction, recoverExplicitCompactionIfStale } from "../compaction.js";
 import { getContextPressureSnapshot } from "../context-pressure.js";
+import { getRecommendationLabel } from "../context-pressure-rendering.js";
 
 const COMPACT_PARAMETERS_SCHEMA = {
     type: "object",
@@ -21,6 +22,9 @@ const COMPACT_PARAMETERS_SCHEMA = {
 
 function buildCompactInstructions(snapshot, focus) {
     const sections = [];
+    if (snapshot.recommendation === "compact-before-next-branch" && snapshot.analysis.latestUserTextRaw) {
+        sections.push(`Preserve the current user request during compaction: ${snapshot.analysis.latestUserTextRaw}`);
+    }
     if (typeof focus === "string" && focus.trim().length > 0) {
         sections.push(`Preserve this focus during compaction: ${focus.trim()}`);
     }
@@ -36,19 +40,21 @@ function buildResultText(status, snapshot) {
         return "DCP compaction already in flight; wait for it to finish before requesting another compaction.";
     }
     if (status === "skipped") {
-        return `DCP compaction skipped: ${snapshot.recommendation === "wait" ? "wait" : "clean up manually first"} · ${snapshot.rationale[0] || "pressure is currently low"}`;
+        return `DCP compaction skipped: ${getRecommendationLabel(snapshot.recommendation)} · ${snapshot.rationale[0] || "pressure is currently low"}`;
     }
-    return `DCP compaction started asynchronously; pause heavy exploration until it finishes. Current recommendation: ${snapshot.recommendation}.`;
+    return `DCP compaction started asynchronously; pause heavy exploration until it finishes. Current recommendation: ${getRecommendationLabel(snapshot.recommendation)}.`;
 }
 
 export function createDcpCompactTool(config, state) {
     return {
         name: "dcp_compact",
         label: "DCP Compact",
-        description: "Trigger pi context compaction when pressure is high and pi-dcp recommends compacting now.",
-        promptSnippet: "Trigger pi compaction when context pressure is high after checking whether compaction is worthwhile.",
+        description: "Trigger pi context compaction when pressure is high or when older closed work should become summary-only before the next branch.",
+        promptSnippet: "Trigger pi compaction when context pressure is high or when older closed work should become summary-only before the next branch.",
         promptGuidelines: [
             "Use this tool after dcp_pressure recommends compaction, or when context is clearly near capacity.",
+            "Use this tool before starting another heavy branch when the previous branch is likely closed and summary-safe.",
+            "Keep active work raw; compact stale closed work when the recommendation justifies it.",
             "After calling this tool, avoid more heavy exploration in the same turn because compaction completes asynchronously.",
         ],
         parameters: COMPACT_PARAMETERS_SCHEMA,
@@ -70,7 +76,7 @@ export function createDcpCompactTool(config, state) {
                     },
                 };
             }
-            if (!force && snapshot.recommendation !== "compact-now") {
+            if (!force && snapshot.recommendation === "wait") {
                 return {
                     content: [{ type: "text", text: buildResultText("skipped", snapshot) }],
                     details: {
