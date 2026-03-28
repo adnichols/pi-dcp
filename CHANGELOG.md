@@ -1,5 +1,27 @@
 # Changelog
 
+## OpenCode-inspired pruning improvements - 2026-03-28
+
+### Added
+
+- protected tool and protected file-path controls for ordinary prune/redact decisions
+- age-gated cleanup for superseded tool results, resolved errors, superseded writes, and stale file reads
+- additive redaction for repeated tool results, resolved errors, and stale file reads
+- `/dcp-context` for live context-cost inspection alongside token-aware `/dcp-stats`
+- normalized exact-signature matching for repeated `read` / `bash` operations and shared path-based identity for `write` / `edit`
+
+### Changed
+
+- the pruning workflow now supports `keep` / `prune` / `redact` actions and mutates retained messages before filtering
+- session stats and status text now track estimated token savings for both pruned and redacted content
+- recency clears ordinary destructive actions for recent retained messages while `tool-pairing` remains the provider-safety backstop
+
+### Technical Notes
+
+- verified against `thoughts/plans/adopt-opencode-pruning-improvements.md`
+- documented actual divergence: implementation also added opt-in stale file read invalidation beyond the original plan scope
+- architecture doc: `spec/architecture/opencode-pruning-improvements.md`
+
 ## [0.1.0](https://github.com/zenobi-us/pi-dcp/compare/v0.0.1...v0.1.0) (2026-02-03)
 
 
