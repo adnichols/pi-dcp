@@ -1,5 +1,33 @@
 # ADR Log
 
+## ADR 0004: Add proactive compaction steering for closed-workstream branch shifts
+**Status:** Accepted (implemented and verified)
+**Date:** 2026-03
+
+**Context:** `pi-dcp` could already prune stale payloads automatically and expose explicit compaction tools, but it was still weak at recognizing when older unique raw history had become summary-safe because a substantial prior turn was closed and a new user branch had begun.
+
+**Decision:**
+- extend the shared context-pressure recommendation helper with a compaction-specific `opportunityKind` classification: `none`, `closed-workstream`, `hard-pressure`
+- add a new recommendation mode, `compact-before-next-branch`, alongside `wait` and `compact-now`
+- keep detection intentionally narrow in v1: only **new-user-turn branch shifts**, not arbitrary intra-turn topic changes
+- preserve hard-pressure precedence, self-traffic exclusion, unresolved-error suppression, and explicit Pi-native compaction through `ctx.compact()`
+- share wording/rendering across `dcp_pressure`, `dcp_compact`, and `before_agent_start` so tools and nudges stay aligned
+
+**Alternatives considered:**
+- OpenCode-style range/message compression
+- semantic topic modeling for branch detection
+- automatic compaction without explicit agent choice
+- leaving compaction steering as a generic churn/pressure nudge only
+
+**Current state:**
+- `src/context-pressure.js`
+- `src/context-pressure-rendering.js`
+- `src/tools/dcp-pressure.js`
+- `src/tools/dcp-compact.js`
+- `src/events/beforeAgentStart.js`
+
+---
+
 ## ADR 0003: Add explicit agent-invoked compaction tools on top of automatic pruning
 **Status:** Accepted (implemented and verified)
 **Date:** 2026-03

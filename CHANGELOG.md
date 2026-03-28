@@ -1,5 +1,26 @@
 # Changelog
 
+## Proactive compaction steering - 2026-03-28
+
+### Added
+
+- branch-shift-aware compaction recommendation logic for substantial prior turns followed by a new user turn
+- shared recommendation rendering used by `dcp_pressure`, `dcp_compact`, and `before_agent_start`
+- stronger compaction nudges with distinct branch-shift and critical-context guidance
+
+### Changed
+
+- the shared recommendation enum is now `wait`, `compact-before-next-branch`, or `compact-now`
+- `dcp_compact` now honors both non-`wait` recommendation modes without requiring `force`
+- branch-shift compaction automatically preserves the latest user request/current branch goal
+- docs now explicitly distinguish automatic prune/redact from explicit Pi-native compaction and note that branch-shift thresholds are hard-coded in this pass
+
+### Technical Notes
+
+- verified against `thoughts/plans/proactive-compaction-steering.md`
+- implementation remains Pi-native and steering-focused; no OpenCode-style compression blocks or extension-managed history rewriting were added
+- architecture doc: `spec/architecture/proactive-compaction-steering.md`
+
 ## Explicit context compaction tools - 2026-03-28
 
 ### Added
