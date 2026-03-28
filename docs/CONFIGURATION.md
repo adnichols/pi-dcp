@@ -242,6 +242,21 @@ export default {
 - `/dcp-stats`
 - `/dcp-context`
 
+## Model-callable tools
+
+When `pi-dcp` is enabled, the extension also registers two tools for the agent:
+
+- `dcp_pressure` - inspect current context pressure, repeated inspection churn, and predicted ordinary pi-dcp savings
+- `dcp_compact` - trigger pi-native compaction with optional focus instructions
+
+These tools are not controlled by a separate config block in the first pass. They reuse the existing pruning config and recommendation heuristics.
+
+Important distinction:
+
+- normal pi-dcp pruning/redaction runs automatically in the `context` hook before each model call
+- `dcp_compact` triggers pi's native compaction flow (`ctx.compact()`), which is a larger session-level summarization step
+- `dcp_pressure` / `dcp_compact` are excluded from recommendation-oriented pressure calculations so they do not create a self-referential pressure loop
+
 ## Built-in rules
 
 1. `deduplication`
@@ -293,3 +308,12 @@ Check, in order:
 ### A recent tool result was still deleted
 
 That usually means `tool-pairing` detected an orphaned or otherwise provider-unsafe tool result. Recency does not override provider-safety deletions.
+
+### Why was I nudged if pi-dcp could not prune much?
+
+Long-session nudges reflect overall pressure, not just immediately prunable content. A session can still be large because of many unique tool results even when ordinary prune/redact savings are small.
+
+In that case the intended path is:
+
+1. call `dcp_pressure` to inspect actual predicted savings and recommendation
+2. call `dcp_compact` if compaction is recommended

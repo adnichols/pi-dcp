@@ -27,6 +27,9 @@ import { createRecentCommand } from "./src/cmds/recent.js";
 import { createInitCommand } from "./src/cmds/init.js";
 import { createToolsExpandedCommand } from "./src/cmds/tools-expanded.js";
 import { dcpLogsCommand } from "./src/cmds/logs.js";
+import { createDcpPressureTool } from "./src/tools/dcp-pressure.js";
+import { createDcpCompactTool } from "./src/tools/dcp-compact.js";
+import { createExplicitCompactionState } from "./src/compaction.js";
 import { createContextEventHandler } from "./src/events/context.js";
 import { createBeforeAgentStartEventHandler } from "./src/events/beforeAgentStart.js";
 import { createSessionStartEventHandler } from "./src/events/sessionStart.js";
@@ -76,6 +79,10 @@ export default async function (pi: ExtensionAPI) {
 	if (!config.enabled) {
 		return; // Exit early if extension is disabled
 	}
+
+	const explicitCompactionState = createExplicitCompactionState();
+	pi.registerTool(createDcpPressureTool(config));
+	pi.registerTool(createDcpCompactTool(config, explicitCompactionState));
 
 	// Track stats across session
 	const statsTracker: StatsTracker = {

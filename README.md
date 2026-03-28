@@ -13,6 +13,7 @@ Pi-DCP now supports both **deletion** and **in-place redaction**:
 - removes or redacts resolved errors
 - removes or redacts older repeated `read` / `bash` results
 - optionally removes or redacts stale `read` results after later successful `write` / `edit` operations to the same file
+- exposes `dcp_pressure` and `dcp_compact` tools so the agent can inspect pressure and trigger pi-native compaction explicitly
 - protects recent messages unless provider safety requires deletion
 - protects configured tools and file paths from destructive cleanup
 - delays destructive cleanup until enough later completed user turns have passed
@@ -36,6 +37,19 @@ git clone https://github.com/zenobi-us/pi-dcp.git ~/.pi/agent/extensions/pi-dcp
 - `/dcp-recent <number>` - set how many recent messages are always protected
 - `/dcp-tools` - show expanded tool information
 - `/dcp-logs` - inspect extension logs
+
+## Model-callable context tools
+
+When the extension is enabled, pi-dcp also registers two tools the agent can call directly:
+
+- `dcp_pressure` - inspect current context pressure, repeated inspection churn, and predicted ordinary pi-dcp savings
+- `dcp_compact` - trigger pi-native compaction with optional focus instructions
+
+These tools are intentionally different from ordinary automatic pruning:
+
+- automatic pruning only removes/redacts context that pi-dcp can safely trim before the next provider call
+- explicit compaction asks pi itself to summarize and reload older context
+- `dcp_pressure` ignores prior `dcp_pressure` / `dcp_compact` traffic in its recommendation path so the tools do not inflate their own pressure signal
 
 ## Configuration
 
@@ -115,6 +129,7 @@ Why it matters:
 - cleanup rules decide what is obsolete
 - `tool-pairing` can still force provider-safety deletions for orphaned tool results
 - `recency` runs last so recent retained messages keep their full payloads instead of being pruned/redacted
+- explicit compaction is separate from this rule pipeline and is only triggered when the agent or user calls `dcp_compact`
 
 ### Matching repeated operations
 
@@ -158,6 +173,7 @@ protectedFilePatterns: [
 - **Prune** removes the whole message
 - **Redact** keeps the message shell and tool identity, but replaces bulky payload text
 - redaction is currently used for older repeated tool results, stale file reads, and resolved errors when enabled
+- **Compaction** is different again: it is pi-native session summarization, triggered explicitly through `dcp_compact` rather than by the ordinary prune/redact rules
 
 ## Visibility
 
