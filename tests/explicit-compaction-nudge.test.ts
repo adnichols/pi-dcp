@@ -122,6 +122,42 @@ describe("Explicit compaction nudge integration", () => {
 		expect(result?.systemPrompt).toContain("Current recommendation: compact now.");
 	});
 
+	test("prefers branch entries so nudges stay aligned with tool recommendations", async () => {
+		const branchMessages: AgentMessage[] = [
+			{ role: "user", content: "Inspect repeatedly" } as AgentMessage,
+			assistantToolCall("read_1", "read", { path: "README.md", offset: 0, limit: 20 }),
+			toolResult("read_1", "read", "old read ".repeat(100)),
+			assistantToolCall("read_2", "read", { path: "README.md", offset: 0, limit: 20 }),
+			toolResult("read_2", "read", "new read"),
+		];
+		const config: DcpConfigWithPruneRuleObjects = {
+			...baseConfig,
+			nudge: {
+				enabled: true,
+				minMessages: 1,
+				minToolResults: 1,
+				minRepeatCount: 2,
+				minContextPercent: 50,
+				notify: false,
+				maxSummaryItems: 2,
+			},
+		};
+		const handler = createBeforeAgentStartEventHandler({ config, statsTracker: createStatsTracker() });
+		const result = await handler(
+			{ systemPrompt: "Base system prompt" } as any,
+			{
+				sessionManager: {
+					getBranch: () => branchMessages.map((message) => ({ type: "message", message })),
+					getEntries: () => [{ type: "message", message: { role: "user", content: "older unrelated message" } }],
+				},
+				getContextUsage: () => ({ percent: 85, tokens: 120000 }),
+				hasUI: false,
+			} as any,
+		);
+
+		expect(result?.systemPrompt).toContain("Current recommendation: compact now.");
+	});
+
 	test("does not inject a nudge when pressure remains low", async () => {
 		const config: DcpConfigWithPruneRuleObjects = {
 			...baseConfig,

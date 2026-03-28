@@ -1,7 +1,7 @@
 /**
  * Explicit compaction trigger tool.
  */
-import { beginExplicitCompaction, completeExplicitCompaction } from "../compaction.js";
+import { beginExplicitCompaction, completeExplicitCompaction, recoverExplicitCompactionIfStale } from "../compaction.js";
 import { getContextPressureSnapshot } from "../context-pressure.js";
 
 const COMPACT_PARAMETERS_SCHEMA = {
@@ -57,12 +57,14 @@ export function createDcpCompactTool(config, state) {
             const usage = ctx.getContextUsage?.() || null;
             const snapshot = getContextPressureSnapshot(entries, config, usage);
             const force = params?.force === true;
+            const recoveredStaleInFlight = recoverExplicitCompactionIfStale(state);
             if (state.inFlight) {
                 return {
                     content: [{ type: "text", text: buildResultText("already-in-flight", snapshot) }],
                     details: {
                         status: "already-in-flight",
                         recommendation: snapshot.recommendation,
+                        recoveredStaleInFlight,
                         snapshot,
                         state: { ...state },
                     },
@@ -74,6 +76,7 @@ export function createDcpCompactTool(config, state) {
                     details: {
                         status: "skipped",
                         recommendation: snapshot.recommendation,
+                        recoveredStaleInFlight,
                         snapshot,
                         state: { ...state },
                     },
@@ -88,18 +91,35 @@ export function createDcpCompactTool(config, state) {
                 }
             };
             if (typeof ctx.compact === "function") {
-                ctx.compact({
-                    customInstructions,
-                    onComplete: () => {
-                        completeExplicitCompaction(state, "completed");
-                        notify("[pi-dcp] Explicit compaction completed.", "info");
-                    },
-                    onError: (error) => {
-                        completeExplicitCompaction(state, "failed");
-                        const message = error instanceof Error ? error.message : String(error);
-                        notify(`[pi-dcp] Explicit compaction failed: ${message}`, "error");
-                    },
-                });
+                try {
+                    ctx.compact({
+                        customInstructions,
+                        onComplete: () => {
+                            completeExplicitCompaction(state, "completed");
+                            notify("[pi-dcp] Explicit compaction completed.", "info");
+                        },
+                        onError: (error) => {
+                            completeExplicitCompaction(state, "failed");
+                            const message = error instanceof Error ? error.message : String(error);
+                            notify(`[pi-dcp] Explicit compaction failed: ${message}`, "error");
+                        },
+                    });
+                }
+                catch (error) {
+                    completeExplicitCompaction(state, "failed");
+                    const message = error instanceof Error ? error.message : String(error);
+                    notify(`[pi-dcp] Explicit compaction failed: ${message}`, "error");
+                    return {
+                        content: [{ type: "text", text: `DCP compaction failed: ${message}` }],
+                        details: {
+                            status: "failed",
+                            recommendation: snapshot.recommendation,
+                            recoveredStaleInFlight,
+                            snapshot,
+                            state: { ...state },
+                        },
+                    };
+                }
             }
             else {
                 completeExplicitCompaction(state, "failed");
@@ -108,6 +128,7 @@ export function createDcpCompactTool(config, state) {
                     details: {
                         status: "failed",
                         recommendation: snapshot.recommendation,
+                        recoveredStaleInFlight,
                         snapshot,
                         state: { ...state },
                     },
@@ -119,6 +140,7 @@ export function createDcpCompactTool(config, state) {
                     status: "started",
                     recommendation: snapshot.recommendation,
                     forced: force,
+                    recoveredStaleInFlight,
                     customInstructions,
                     snapshot,
                     state: { ...state },

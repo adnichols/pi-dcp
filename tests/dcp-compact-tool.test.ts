@@ -140,4 +140,74 @@ describe("dcp_compact tool", () => {
 		expect(state.lastOutcome).toBe("failed");
 		expect(notifications.some((message) => message.includes("failed"))).toBe(true);
 	});
+
+	test("falls back to getEntries and fails cleanly when ctx.compact is unavailable", async () => {
+		const state = createExplicitCompactionState();
+		const tool = createDcpCompactTool(config, state);
+
+		const result = await tool.execute("call_compact_6", { force: true }, undefined, undefined, {
+			sessionManager: {
+				getEntries: () => [{ type: "message", message: { role: "user", content: "Need compaction" } }],
+			},
+			getContextUsage: () => ({ percent: 85, tokens: 120000 }),
+		} as any);
+
+		expect(result.details.status).toBe("failed");
+		expect(state.inFlight).toBe(false);
+		expect((result.content as any[])[0].text).toContain("ctx.compact() is not available");
+	});
+
+	test("recovers from stale in-flight state before allowing a new compaction attempt", async () => {
+		const originalNow = Date.now;
+		Date.now = () => 1_000_000;
+		try {
+			const state = createExplicitCompactionState();
+			state.inFlight = true;
+			state.lastStartedAt = 1_000_000 - 180_000;
+			state.lastStartedMessageCount = 7;
+			state.lastOutcome = "started";
+			const tool = createDcpCompactTool(config, state);
+			let compactCalled = false;
+
+			const result = await tool.execute("call_compact_7", { force: true }, undefined, undefined, {
+				sessionManager: {
+					getBranch: () => [{ type: "message", message: { role: "user", content: "Retry compaction" } }],
+				},
+				getContextUsage: () => ({ percent: 90, tokens: 140000 }),
+				compact: () => {
+					compactCalled = true;
+				},
+			} as any);
+
+			expect(compactCalled).toBe(true);
+			expect(result.details.status).toBe("started");
+			expect(result.details.recoveredStaleInFlight).toBe(true);
+			expect(state.inFlight).toBe(true);
+		} finally {
+			Date.now = originalNow;
+		}
+	});
+
+	test("recovers state when ctx.compact throws synchronously", async () => {
+		const state = createExplicitCompactionState();
+		const tool = createDcpCompactTool(config, state);
+		const notifications: string[] = [];
+
+		const result = await tool.execute("call_compact_8", { force: true }, undefined, undefined, {
+			hasUI: true,
+			ui: { notify: (message: string) => notifications.push(message) },
+			sessionManager: {
+				getBranch: () => [{ type: "message", message: { role: "user", content: "Need compaction" } }],
+			},
+			getContextUsage: () => ({ percent: 85, tokens: 120000 }),
+			compact: () => {
+				throw new Error("sync boom");
+			},
+		} as any);
+
+		expect(result.details.status).toBe("failed");
+		expect(state.inFlight).toBe(false);
+		expect(state.lastOutcome).toBe("failed");
+		expect(notifications.some((message) => message.includes("sync boom"))).toBe(true);
+	});
 });

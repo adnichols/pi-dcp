@@ -79,7 +79,7 @@ export function createBeforeAgentStartEventHandler(options) {
     let lastNotifiedAtMessages = 0;
     return async (event, ctx) => {
         try {
-            const entries = ctx.sessionManager.getEntries();
+            const entries = ctx.sessionManager.getBranch?.() || ctx.sessionManager.getEntries?.() || [];
             const messages = entries
                 .filter((entry) => entry?.type === "message")
                 .map((entry) => entry.message);

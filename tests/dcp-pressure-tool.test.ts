@@ -98,9 +98,22 @@ describe("dcp_pressure tool", () => {
 		expect(result.details.recommendation).toBe("wait");
 	});
 
-	test("remains safe when context usage is unavailable", async () => {
+	test("falls back to getEntries when getBranch is unavailable", async () => {
 		const tool = createDcpPressureTool(config);
 		const result = await tool.execute("call_pressure_3", {}, undefined, undefined, {
+			sessionManager: {
+				getEntries: () => [{ type: "message", message: { role: "user", content: "Hello from entries" } }],
+			},
+			getContextUsage: () => ({ percent: 25, tokens: 5000 }),
+		} as any);
+
+		expect(result.details.analysis.originalMessageCount).toBe(1);
+		expect(result.details.recommendation).toBe("wait");
+	});
+
+	test("remains safe when context usage is unavailable", async () => {
+		const tool = createDcpPressureTool(config);
+		const result = await tool.execute("call_pressure_4", {}, undefined, undefined, {
 			sessionManager: {
 				getBranch: () => [{ type: "message", message: { role: "user", content: "Hello" } }],
 			},

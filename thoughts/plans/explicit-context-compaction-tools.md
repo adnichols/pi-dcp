@@ -198,6 +198,7 @@ Recommended prompt guidance:
 - [x] P2 Phase 2: add the `dcp_pressure` tool and actionable inspection output
 - [x] P3 Phase 3: add the `dcp_compact` tool with compaction guards and notifications
 - [x] P4 Phase 4: connect nudges/docs/tests to the new explicit tool workflow
+- [x] Post-review hardening: after Claude review, aligned nudges with branch-scoped session data, added stale in-flight recovery plus synchronous `ctx.compact()` failure recovery, and expanded fallback/error coverage for explicit compaction tools
 
 ## Phase 1 (P1): validate pi-native compaction integration points and extract shared recommendation helpers
 
