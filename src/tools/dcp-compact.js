@@ -92,7 +92,7 @@ export function createDcpCompactTool(config, state) {
             };
             if (typeof ctx.compact === "function") {
                 try {
-                    ctx.compact({
+                    const compactionResult = ctx.compact({
                         customInstructions,
                         onComplete: () => {
                             completeExplicitCompaction(state, "completed");
@@ -104,6 +104,13 @@ export function createDcpCompactTool(config, state) {
                             notify(`[pi-dcp] Explicit compaction failed: ${message}`, "error");
                         },
                     });
+                    if (compactionResult && typeof compactionResult.catch === "function") {
+                        compactionResult.catch((error) => {
+                            completeExplicitCompaction(state, "failed");
+                            const message = error instanceof Error ? error.message : String(error);
+                            notify(`[pi-dcp] Explicit compaction failed: ${message}`, "error");
+                        });
+                    }
                 }
                 catch (error) {
                     completeExplicitCompaction(state, "failed");

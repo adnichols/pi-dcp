@@ -210,4 +210,27 @@ describe("dcp_compact tool", () => {
 		expect(state.lastOutcome).toBe("failed");
 		expect(notifications.some((message) => message.includes("sync boom"))).toBe(true);
 	});
+
+	test("recovers state when ctx.compact returns a rejected promise", async () => {
+		const state = createExplicitCompactionState();
+		const tool = createDcpCompactTool(config, state);
+		const notifications: string[] = [];
+
+		const result = await tool.execute("call_compact_9", { force: true }, undefined, undefined, {
+			hasUI: true,
+			ui: { notify: (message: string) => notifications.push(message) },
+			sessionManager: {
+				getBranch: () => [{ type: "message", message: { role: "user", content: "Need compaction" } }],
+			},
+			getContextUsage: () => ({ percent: 85, tokens: 120000 }),
+			compact: () => Promise.reject(new Error("async boom")),
+		} as any);
+
+		expect(result.details.status).toBe("started");
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(state.inFlight).toBe(false);
+		expect(state.lastOutcome).toBe("failed");
+		expect(notifications.some((message) => message.includes("async boom"))).toBe(true);
+	});
 });
