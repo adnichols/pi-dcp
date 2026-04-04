@@ -20,7 +20,7 @@ import { getRule, getRuleNames } from "./registry.js";
  */
 const DEFAULT_CONFIG = {
     enabled: true,
-    debug: true,
+    debug: false,
     rules: ["deduplication", "superseded-writes", "error-purging", "superseded-tool-results", "tool-pairing", "recency"],
     keepRecentCount: 10,
     protectedTools: [],

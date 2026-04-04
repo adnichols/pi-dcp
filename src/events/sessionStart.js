@@ -12,14 +12,19 @@
  */
 export function createSessionStartEventHandler(options) {
     const { config } = options;
-    return (event, ctx) => {
-        ctx.ui.notify(`DCP: Active with ${config.rules.length} rules \n${config.rules.map(r => `\t- ${r.name}`).join("\n")}`, "info");
+    return (_event, ctx) => {
+        if (ctx.hasUI && ctx.ui?.setStatus) {
+            ctx.ui.setStatus("pi-dcp", `DCP active · ${config.rules.length} rules`);
+        }
     };
 }
 export function createSessionSwitchEventHandler(options) {
     const { config } = options;
     return (event, ctx) => {
-        ctx.ui.notify(`DCP: Switched to session [${event.reason}]`, "info");
+        if (ctx.hasUI && ctx.ui?.setStatus) {
+            const reason = event?.reason ? ` · switched (${event.reason})` : "";
+            ctx.ui.setStatus("pi-dcp", `DCP active · ${config.rules.length} rules${reason}`);
+        }
     };
 }
 //# sourceMappingURL=sessionStart.js.map

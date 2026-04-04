@@ -68,7 +68,7 @@ export interface DcpConfig {
 ```ts
 export default {
   enabled: true,
-  debug: true,
+  debug: false,
   rules: [
     "deduplication",
     "superseded-writes",
